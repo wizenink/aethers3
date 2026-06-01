@@ -116,7 +116,7 @@ defmodule AetherS3.Storage.Streamer do
     try do
       {size, md5} =
         part_paths
-        |> Stream.flat_map(fn path -> File.stream!(path, [], @chunk) end)
+        |> Stream.flat_map(fn path -> File.stream!(path, @chunk) end)
         |> Enum.reduce({0, :crypto.hash_init(:md5)}, fn chunk, {size, md5} ->
           :ok = :file.write(out, chunk)
           {size + byte_size(chunk), :crypto.hash_update(md5, chunk)}

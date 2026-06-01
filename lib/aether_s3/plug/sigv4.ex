@@ -16,6 +16,14 @@ defmodule AetherS3.Plug.SigV4 do
 
   @impl true
   def call(conn, _opts) do
+    if Application.get_env(:aether_s3, :require_auth, true) do
+      authenticate(conn)
+    else
+      conn
+    end
+  end
+
+  defp authenticate(conn) do
     with [auth] <- get_req_header(conn, "authorization"),
          {:ok, p} <- parse_auth_header(auth),
          secret when is_binary(secret) <- secret_for(p.access_key),
