@@ -7,6 +7,7 @@ defmodule AetherS3.Router do
   alias AetherS3.ObjectMeta.Store, as: ObjectMeta
   alias AetherS3.ControlPlane.Store, as: ControlPlane
   alias AetherS3.Storage.MultipartSession
+  alias AetherS3.Replication.Coordinator
 
   plug(AetherS3.Plug.SigV4)
   plug(:match)
@@ -126,8 +127,8 @@ defmodule AetherS3.Router do
     bucket = conn.params["bucket"]
     key = Enum.join(conn.params["key"], "/")
 
-    case ObjectMeta.get(bucket, key) do
-      {:ok, meta} ->
+    case Coordinator.locate(bucket, key) do
+      {:ok, meta, _node} ->
         conn
         |> put_resp_header("etag", ~s("#{meta.etag}"))
         |> put_resp_header("content-length", Integer.to_string(meta.size))
@@ -170,19 +171,9 @@ defmodule AetherS3.Router do
         content_type =
           conn |> get_req_header("content-type") |> List.first() || "application/octet-stream"
 
-        path = BlobStore.path(bucket, key)
-
         if ControlPlane.bucket_exists?(bucket) do
-          case Streamer.ingest(conn, path) do
-            {:ok, %{size: size, etag: etag}} ->
-              :ok =
-                ObjectMeta.put(bucket, key, %{
-                  size: size,
-                  etag: etag,
-                  content_type: content_type,
-                  last_modified: DateTime.utc_now()
-                })
-
+          case Coordinator.put(conn, bucket, key, content_type) do
+            {:ok, etag} ->
               conn
               |> put_resp_header("etag", ~s("#{etag}"))
               |> send_resp(200, "")
