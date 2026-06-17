@@ -87,6 +87,64 @@ defmodule AetherS3.Storage.Streamer do
     )
   end
 
+  @doc """
+  Proxy a GET for an object stored on a remote `node`: pull the requested byte
+  range from the holder over :erpc, chunk-by-chunk, and relay to the client.
+  `total` is the object size (we already have it from the located metadata).
+  """
+  def egress_remote(conn, node, bucket, key, total, opts \\ []) do
+    {status, start, length, conn} =
+      case parse_range(Keyword.get(opts, :range), total) do
+        :none ->
+          {200, 0, total, conn}
+
+        {first, last} ->
+          conn =
+            Plug.Conn.put_resp_header(conn, "content-range", "bytes #{first}-#{last}/#{total}")
+
+          {206, first, last - first + 1, conn}
+      end
+
+    conn =
+      conn
+      |> Plug.Conn.put_resp_header("accept-ranges", "bytes")
+      |> Plug.Conn.send_chunked(status)
+
+    node
+    |> remote_slice(bucket, key, start, length)
+    |> Enum.reduce_while(conn, fn bytes, conn ->
+      case Plug.Conn.chunk(conn, bytes) do
+        {:ok, conn} -> {:cont, conn}
+        {:error, :closed} -> {:halt, conn}
+      end
+    end)
+  end
+
+  # Like stream_slice, but the bytes come from a peer's BlobReader over :erpc.
+  defp remote_slice(node, bucket, key, start, length) do
+    Stream.resource(
+      fn -> {start, length} end,
+      fn {pos, remaining} ->
+        if remaining <= 0 do
+          {:halt, {pos, remaining}}
+        else
+          to_read = min(remaining, @chunk)
+
+          case :erpc.call(node, AetherS3.Replication.BlobReader, :read, [
+                 bucket,
+                 key,
+                 pos,
+                 to_read
+               ]) do
+            {:ok, data} -> {[data], {pos + byte_size(data), remaining - byte_size(data)}}
+            :eof -> {:halt, {pos, 0}}
+          end
+        end
+      end,
+      fn _ -> :ok end
+    )
+  end
+
   # Parse an HTTP Range header value against the object's total size.
   defp parse_range(nil, _total), do: :none
 

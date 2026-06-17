@@ -21,13 +21,23 @@ defmodule AetherS3.Replication.Coordinator do
           last_modified: DateTime.utc_now()
         }
 
-        # W1: first replica synchronously, the rest fire-and-forget.
-        # TODO: Implement W=[2..]
+        # W=1: first replica synchronously, then return. The rest replicate in the
+        # background; once done, drop our staging copy if this coordinator isn't
+        # itself a replica — otherwise it leaks an orphan blob.
+        #
+        # TODO: This only covers the happy path. Crash/partition orphans and failed
+        # replications are NOT cleaned here — they need an anti-entropy reaper 
+        # that sweeps blobs lacking local metadata + not owned by this node per HRW.
+        # The cleaner long-term design is "route-to-primary": stream the body to the HRW
+        # primary, which stages and fans out, so bytes only ever land on replicas and no
+        # staging orphan is ever created (also unifies the multipart write path).
+        # TODO: make W configurable (W>=2) for stronger durability-before-ack.
         [head | tail] = replicas
         :ok = replicate_to(head, bucket, key, staged, meta)
 
-        Enum.each(tail, fn t ->
-          Task.start(fn -> replicate_to(t, bucket, key, staged, meta) end)
+        Task.start(fn ->
+          Enum.each(tail, fn t -> replicate_to(t, bucket, key, staged, meta) end)
+          unless Node.self() in replicas, do: File.rm(staged)
         end)
 
         {:ok, etag}
@@ -46,6 +56,39 @@ defmodule AetherS3.Replication.Coordinator do
         :not_found -> nil
       end
     end)
+  end
+
+  def delete(bucket, key) do
+    "#{bucket}/#{key}"
+    |> RingServer.replicas()
+    |> Enum.each(fn node -> delete_from(node, bucket, key) end)
+  end
+
+  def list(bucket) do
+    RingServer.members()
+    |> Enum.flat_map(fn node -> list_from(node, bucket) end)
+    |> Enum.uniq_by(fn {key, _meta} -> key end)
+    |> Enum.sort_by(fn {key, _meta} -> key end)
+  end
+
+  defp list_from(node, bucket) when node == node() do
+    ObjectMeta.list(bucket)
+  end
+
+  defp list_from(node, bucket) do
+    :erpc.call(node, AetherS3.ObjectMeta.Store, :list, [bucket])
+  rescue
+    _ -> []
+  end
+
+  defp delete_from(node, bucket, key) when node == node() do
+    Receiver.delete(bucket, key)
+  end
+
+  defp delete_from(node, bucket, key) do
+    :erpc.call(node, Receiver, :delete, [bucket, key])
+  rescue
+    _ -> :ok
   end
 
   defp replicate_to(target, bucket, key, _staged, meta) when target == node() do

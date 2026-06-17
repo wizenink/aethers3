@@ -21,7 +21,7 @@ defmodule AetherS3.Router do
 
   get "/:bucket" do
     bucket = conn.params["bucket"]
-    objects = ObjectMeta.list(bucket)
+    objects = Coordinator.list(bucket)
 
     conn
     |> put_resp_content_type("application/xml")
@@ -50,16 +50,20 @@ defmodule AetherS3.Router do
   get "/:bucket/*key" do
     bucket = conn.params["bucket"]
     key = Enum.join(conn.params["key"], "/")
-    path = BlobStore.path(bucket, key)
+    range = conn |> get_req_header("range") |> List.first()
 
-    case ObjectMeta.get(bucket, key) do
-      {:ok, meta} ->
-        range = conn |> get_req_header("range") |> List.first()
+    case Coordinator.locate(bucket, key) do
+      {:ok, meta, node} ->
+        conn =
+          conn
+          |> put_resp_header("content-type", meta.content_type)
+          |> put_resp_header("last-modified", http_date(meta.last_modified))
 
-        conn
-        |> put_resp_header("content-type", meta.content_type)
-        |> put_resp_header("last-modified", http_date(meta.last_modified))
-        |> Streamer.egress(path, range: range)
+        if node == Node.self() do
+          Streamer.egress(conn, BlobStore.path(bucket, key), range: range)
+        else
+          Streamer.egress_remote(conn, node, bucket, key, meta.size, range: range)
+        end
 
       :not_found ->
         conn
@@ -211,9 +215,7 @@ defmodule AetherS3.Router do
         send_resp(conn, 204, "")
 
       _ ->
-        path = BlobStore.path(bucket, key)
-        :ok = ObjectMeta.delete(bucket, key)
-        File.rm(path)
+        :ok = Coordinator.delete(bucket, key)
         send_resp(conn, 204, "")
     end
   end

@@ -18,4 +18,10 @@ defmodule AetherS3.Replication.Receiver do
   def commit(bucket, key, meta) do
     ObjectMeta.put(bucket, key, meta)
   end
+
+  def delete(bucket, key) do
+    ObjectMeta.delete(bucket, key)
+    File.rm(BlobStore.path(bucket, key))
+    :ok
+  end
 end
