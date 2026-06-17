@@ -25,7 +25,8 @@ defmodule AetherS3.MixProject do
       {:bandit, "~> 1.12"},
       {:plug, "~> 1.20"},
       {:cubdb, "~> 2.0"},
-      {:saxy, "~> 1.6"}
+      {:saxy, "~> 1.6"},
+      {:khepri, "~> 0.18.0"}
     ]
   end
 end

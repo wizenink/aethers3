@@ -12,10 +12,7 @@ defmodule AetherS3.Application do
         {CubDB, data_dir: Path.join(data_dir, "objmeta"), name: AetherS3.ObjectMeta.DB},
         id: :objmeta_db
       ),
-      Supervisor.child_spec(
-        {CubDB, data_dir: Path.join(data_dir, "ctrl"), name: AetherS3.ControlPlane.DB},
-        id: :ctrl_db
-      ),
+      {AetherS3.ControlPlane.Khepri, name: AetherS3.ControlPlane.Khepri},
       {Registry, keys: :unique, name: AetherS3.UploadRegistry},
       {DynamicSupervisor, strategy: :one_for_one, name: AetherS3.UploadSupervisor},
       {Bandit, plug: AetherS3.Router, scheme: :http, port: port}
