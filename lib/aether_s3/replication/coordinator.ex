@@ -47,6 +47,27 @@ defmodule AetherS3.Replication.Coordinator do
     end
   end
 
+  def push_blob(target, bucket, key, meta) do
+    staged = BlobStore.path(bucket, key)
+    :ok = :erpc.call(target, Receiver, :begin, [bucket, key])
+
+    staged
+    |> File.stream!(@chunk)
+    |> Enum.each(fn chunk ->
+      :ok = :erpc.call(target, Receiver, :write_chunk, [bucket, key, chunk])
+    end)
+
+    :erpc.call(target, Receiver, :commit, [bucket, key, meta])
+  rescue
+    e ->
+      Logger.warning("push_blob to #{target} failed: #{inspect(e)}")
+      {:error, e}
+  catch
+    kind, reason ->
+      Logger.warning("push_blob to #{target} exited: #{inspect({kind, reason})}")
+      {:error, reason}
+  end
+
   def locate(bucket, key) do
     replicas = RingServer.replicas("#{bucket}/#{key}")
 
@@ -95,21 +116,7 @@ defmodule AetherS3.Replication.Coordinator do
     ObjectMeta.put(bucket, key, meta)
   end
 
-  defp replicate_to(target, bucket, key, staged, meta) do
-    :ok = :erpc.call(target, Receiver, :begin, [bucket, key])
-
-    staged
-    |> File.stream!(@chunk)
-    |> Enum.each(fn chunk ->
-      :ok = :erpc.call(target, Receiver, :write_chunk, [bucket, key, chunk])
-    end)
-
-    :erpc.call(target, Receiver, :commit, [bucket, key, meta])
-  rescue
-    e ->
-      Logger.warning("Replication to #{target} failed: #{inspect(e)}")
-      {:error, e}
-  end
+  defp replicate_to(target, bucket, key, _staged, meta), do: push_blob(target, bucket, key, meta)
 
   defp get_meta_from(node, bucket, key) when node == node() do
     ObjectMeta.get(bucket, key)

@@ -21,4 +21,9 @@ if config_env() != :test do
   config :aether_s3,
          :replication_factor,
          String.to_integer(System.get_env("AETHER_REPLICATION_FACTOR", "3"))
+
+  config :libcluster,
+    topologies: [
+      aether: [strategy: Cluster.Strategy.LocalEpmd]
+    ]
 end

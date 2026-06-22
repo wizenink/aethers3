@@ -26,7 +26,8 @@ defmodule AetherS3.MixProject do
       {:plug, "~> 1.20"},
       {:cubdb, "~> 2.0"},
       {:saxy, "~> 1.6"},
-      {:khepri, "~> 0.18.0"}
+      {:khepri, "~> 0.18.0"},
+      {:libcluster, "~> 3.5"}
     ]
   end
 end

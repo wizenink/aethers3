@@ -7,14 +7,18 @@ defmodule AetherS3.Application do
     port = Application.get_env(:aether_s3, :port, 9000)
 
     children = [
+      {Cluster.Supervisor,
+       [Application.get_env(:libcluster, :topologies, []), [name: AetherS3.ClusterSupervisor]]},
       {AetherS3.Cluster.RingServer, name: AetherS3.Cluster.RingServer},
       Supervisor.child_spec(
         {CubDB, data_dir: Path.join(data_dir, "objmeta"), name: AetherS3.ObjectMeta.DB},
         id: :objmeta_db
       ),
       {AetherS3.ControlPlane.Khepri, name: AetherS3.ControlPlane.Khepri},
+      {AetherS3.ControlPlane.Cluster, name: AetherS3.ControlPlane.Cluster},
       {Registry, keys: :unique, name: AetherS3.UploadRegistry},
       {DynamicSupervisor, strategy: :one_for_one, name: AetherS3.UploadSupervisor},
+      {AetherS3.Replication.AntiEntropy, name: AetherS3.Replication.AntiEntropy},
       {Bandit, plug: AetherS3.Router, scheme: :http, port: port}
     ]
 
