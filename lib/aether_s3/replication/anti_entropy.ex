@@ -7,6 +7,7 @@ defmodule AetherS3.Replication.AntiEntropy do
   alias AetherS3.ObjectMeta.Store, as: ObjectMeta
 
   use GenServer
+  require Logger
 
   @interval :timer.seconds(15)
 
@@ -37,6 +38,7 @@ defmodule AetherS3.Replication.AntiEntropy do
     |> Enum.reject(&(&1 == Node.self()))
     |> Enum.each(fn replica ->
       if stale?(replica, bucket, key, local_meta) do
+        Logger.info("anti-entropy: repairing #{bucket}/#{key} → #{replica}")
         Coordinator.push_blob(replica, bucket, key, local_meta)
       end
     end)

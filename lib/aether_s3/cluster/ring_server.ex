@@ -1,5 +1,6 @@
 defmodule AetherS3.Cluster.RingServer do
   use GenServer
+  require Logger
   alias AetherS3.Cluster.Ring
 
   @pt_key {__MODULE__, :members}
@@ -25,5 +26,6 @@ defmodule AetherS3.Cluster.RingServer do
   defp update_members do
     members = Enum.sort([Node.self() | Node.list()])
     :persistent_term.put(@pt_key, members)
+    Logger.info("cluster membership (#{length(members)}): #{inspect(members)}")
   end
 end

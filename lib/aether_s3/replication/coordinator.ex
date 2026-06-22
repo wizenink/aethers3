@@ -34,6 +34,7 @@ defmodule AetherS3.Replication.Coordinator do
         # TODO: make W configurable (W>=2) for stronger durability-before-ack.
         [head | tail] = replicas
         :ok = replicate_to(head, bucket, key, staged, meta)
+        Logger.info("stored #{bucket}/#{key} (#{size}B etag=#{etag}) → #{inspect(replicas)}")
 
         Task.start(fn ->
           Enum.each(tail, fn t -> replicate_to(t, bucket, key, staged, meta) end)
