@@ -1,0 +1,6 @@
+# Pin the Erlang distribution listen port to a small, known range so it can be
+# opened in firewalls / exposed in Docker (otherwise the VM picks a random
+# ephemeral port that nothing can predict). epmd (TCP 4369) must also be
+# reachable between nodes. A range (not a single port) lets several nodes run on
+# one host for local testing; one-node-per-container uses the low end.
+-kernel inet_dist_listen_min 9100 inet_dist_listen_max 9110

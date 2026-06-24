@@ -22,8 +22,28 @@ if config_env() != :test do
          :replication_factor,
          String.to_integer(System.get_env("AETHER_REPLICATION_FACTOR", "3"))
 
-  config :libcluster,
-    topologies: [
-      aether: [strategy: Cluster.Strategy.LocalEpmd]
-    ]
+  # Cluster discovery strategy, chosen per deployment:
+  #   * AETHER_DNS_QUERY set  -> DNSPoll: resolve that DNS name to peer IPs and
+  #     connect to <basename>@<ip> (works across machines/containers/k8s where a
+  #     headless service / Docker DNS returns all node IPs).
+  #   * otherwise             -> LocalEpmd: same-host discovery, for local dev.
+  topologies =
+    case System.get_env("AETHER_DNS_QUERY") do
+      nil ->
+        [aether: [strategy: Cluster.Strategy.LocalEpmd]]
+
+      query ->
+        [
+          aether: [
+            strategy: Cluster.Strategy.DNSPoll,
+            config: [
+              polling_interval: 5_000,
+              query: query,
+              node_basename: System.get_env("AETHER_NODE_BASENAME", "aether")
+            ]
+          ]
+        ]
+    end
+
+  config :libcluster, topologies: topologies
 end

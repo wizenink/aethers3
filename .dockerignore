@@ -1,0 +1,9 @@
+_build
+deps
+tmp
+.git
+.elixir_ls
+.elixir-tools
+burrito_out
+*.tar
+*.tgz

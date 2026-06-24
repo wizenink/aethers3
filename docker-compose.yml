@@ -1,0 +1,22 @@
+name: aether
+
+# A 3-node AetherS3 cluster. Scale with:  docker compose up --build --scale aether=3
+# Discovery: DNSPoll resolves the compose service name "aether" to all container
+# IPs; each container names itself aether@<its-ip> (see docker-entrypoint.sh).
+services:
+  aether:
+    build: .
+    environment:
+      RELEASE_COOKIE: dev-cluster-cookie
+      RELEASE_DISTRIBUTION: name
+      AETHER_REQUIRE_AUTH: "false"
+      AETHER_NODE_BASENAME: aether
+      AETHER_DNS_QUERY: aether
+      AETHER_DATA_DIR: /data
+      AETHER_PORT: "9000"
+    networks:
+      - aether
+    # Object API on 9000; epmd 4369 + pinned dist port 9100-9110 stay internal.
+
+networks:
+  aether: {}

@@ -8,8 +8,34 @@ defmodule AetherS3.MixProject do
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      aliases: aliases()
+      aliases: aliases(),
+      releases: releases()
     ]
+  end
+
+  defp releases do
+    [
+      aether_s3: [
+        steps: release_steps(),
+        burrito: [
+          targets: [
+            macos: [os: :darwin, cpu: :aarch64],
+            linux: [os: :linux, cpu: :x86_64]
+          ]
+        ]
+      ]
+    ]
+  end
+
+  # Default: a plain folder release (used by Docker and `mix rel`). Set
+  # BURRITO_BUILD=1 to instead wrap it into single self-contained executables
+  # (one per target). Burrito needs `zig` and `7z`/`xz` installed.
+  defp release_steps do
+    if System.get_env("BURRITO_BUILD") == "1" do
+      [:assemble, &Burrito.wrap/1]
+    else
+      [:assemble]
+    end
   end
 
   # `mix rel` builds the release, working around a bug in khepri's `horus` dep
@@ -37,7 +63,7 @@ defmodule AetherS3.MixProject do
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
-    [
+    base = [
       {:bandit, "~> 1.12"},
       {:plug, "~> 1.20"},
       {:cubdb, "~> 2.0"},
@@ -45,5 +71,11 @@ defmodule AetherS3.MixProject do
       {:khepri, "~> 0.18.0"},
       {:libcluster, "~> 3.5"}
     ]
+
+    if System.get_env("BURRITO_BUILD") == "1" do
+      base ++ [{:burrito, "~> 1.5", runtime: false}]
+    else
+      base
+    end
   end
 end
