@@ -59,3 +59,56 @@ if config_env() != :test do
 
   config :libcluster, topologies: topologies
 end
+
+# Production config file (TOML). Env vars above are the dev/default path; in
+# production drop a file at AETHER_CONFIG (default /etc/aether_s3/config.toml) and
+# its values override the env-derived ones. Absent file -> no-op (dev/test).
+# Node name & cookie are BEAM-level (rel/vm.args.eex, RELEASE_* / ~/.erlang.cookie),
+# not application config, so they are NOT set here.
+toml_path = System.get_env("AETHER_CONFIG", "/etc/aether_s3/config.toml")
+
+if File.exists?(toml_path) do
+  toml = Toml.decode_file!(toml_path)
+
+  if v = toml["port"], do: config(:aether_s3, :port, v)
+  if v = toml["data_dir"], do: config(:aether_s3, :data_dir, v)
+  if v = toml["replication_factor"], do: config(:aether_s3, :replication_factor, v)
+  if v = toml["credentials"], do: config(:aether_s3, :credentials, v)
+
+  # require_auth may legitimately be false, so test key presence, not truthiness.
+  if Map.has_key?(toml, "require_auth"),
+    do: config(:aether_s3, :require_auth, toml["require_auth"])
+
+  if v = toml["write_quorum"] do
+    quorum =
+      case v do
+        "quorum" -> :quorum
+        "all" -> :all
+        n when is_integer(n) -> n
+      end
+
+    config :aether_s3, :write_quorum, quorum
+  end
+
+  if cluster = toml["cluster"] do
+    topologies =
+      case cluster["strategy"] do
+        "dns" ->
+          [
+            aether: [
+              strategy: Cluster.Strategy.DNSPoll,
+              config: [
+                polling_interval: 5_000,
+                query: cluster["dns_query"],
+                node_basename: cluster["node_basename"] || "aether"
+              ]
+            ]
+          ]
+
+        _ ->
+          [aether: [strategy: Cluster.Strategy.LocalEpmd]]
+      end
+
+    config :libcluster, topologies: topologies
+  end
+end

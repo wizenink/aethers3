@@ -126,14 +126,43 @@ All runtime configuration is via environment variables.
 | `AETHER_ACCESS_KEY` | `AKIAEXAMPLE` | S3 access key (development default). |
 | `AETHER_SECRET_KEY` | `devsecret` | S3 secret key (development default). |
 | `AETHER_REPLICATION_FACTOR` | `3` | Number of replicas per object. |
+| `AETHER_WRITE_QUORUM` | `1` | Replicas that must ack before a PUT returns: an integer, `quorum`, or `all`. Higher = more durable, less available. |
 | `AETHER_DNS_QUERY` | _(unset)_ | If set, use DNSPoll discovery against this DNS name; otherwise LocalEpmd (same-host). |
 | `AETHER_NODE_BASENAME` | `aether` | Node basename used to build peer node names under DNSPoll. |
+| `AETHER_CONFIG` | `/etc/aether_s3/config.toml` | Path to the production TOML config file (see below). |
 
 BEAM/release variables also apply: `RELEASE_NODE`, `RELEASE_COOKIE`,
 `RELEASE_DISTRIBUTION`.
 
 The default credentials are for local development only. Set real ones, turn on
 auth, and use a private cookie before exposing a node.
+
+### Production config file (TOML)
+
+Environment variables are the dev/default path. For production, drop a TOML file
+at `AETHER_CONFIG` (default `/etc/aether_s3/config.toml`); when present, its
+values override the environment. See `config.toml.example` for the full schema:
+
+```toml
+port = 9000
+data_dir = "/var/lib/aether_s3"
+replication_factor = 3
+write_quorum = "quorum"
+require_auth = true
+
+[credentials]
+AKIAEXAMPLE = "change-me"
+
+[cluster]
+strategy = "dns"          # "dns" (DNSPoll) or "epmd" (same-host)
+dns_query = "aether.internal"
+node_basename = "aether"
+```
+
+For Docker, mount the file in (e.g. `-v ./config.toml:/etc/aether_s3/config.toml`);
+for the Burrito binary it just needs to exist at that path on the host. The node
+**name** and **cookie** are BEAM-level (set via `RELEASE_NODE` /
+`rel/vm.args.eex` and `RELEASE_COOKIE` / `~/.erlang.cookie`), not this file.
 
 ## Cluster discovery across machines
 

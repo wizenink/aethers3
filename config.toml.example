@@ -1,0 +1,30 @@
+# AetherS3 production config file (TOML).
+#
+# Place this on each node (default path: /etc/aether_s3/config.toml, or point
+# AETHER_CONFIG at it). When present, these values override the environment
+# variables — env vars are the dev/default path, this file is for production.
+#
+# NOT set here (they are BEAM-level, needed before app config loads):
+#   - node name  -> RELEASE_NODE / rel/vm.args.eex
+#   - dist cookie -> RELEASE_COOKIE / ~/.erlang.cookie (mode 0400 in prod)
+
+port = 9000
+data_dir = "/var/lib/aether_s3"
+replication_factor = 3
+
+# Replicas that must ack before a PUT returns: an integer, "quorum", or "all".
+# Higher = more durable, less available. "quorum" survives a minority loss.
+write_quorum = "quorum"
+
+require_auth = true
+
+# S3 credentials: access_key = secret_key (one or more pairs).
+[credentials]
+AKIAEXAMPLE = "change-me"
+
+# Cluster discovery. strategy = "dns" (DNSPoll across machines/containers/k8s)
+# or "epmd" (same-host dev). For "dns", dns_query must resolve to all node IPs.
+[cluster]
+strategy = "dns"
+dns_query = "aether.internal"
+node_basename = "aether"

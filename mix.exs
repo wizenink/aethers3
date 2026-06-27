@@ -69,7 +69,8 @@ defmodule AetherS3.MixProject do
       {:cubdb, "~> 2.0"},
       {:saxy, "~> 1.6"},
       {:khepri, "~> 0.18.0"},
-      {:libcluster, "~> 3.5"}
+      {:libcluster, "~> 3.5"},
+      {:toml, "~> 0.7"}
     ]
 
     if System.get_env("BURRITO_BUILD") == "1" do
