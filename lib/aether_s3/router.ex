@@ -4,9 +4,8 @@ defmodule AetherS3.Router do
   alias AetherS3.Storage.BlobStore
   alias AetherS3.Storage.Streamer
   alias AetherS3.S3.XML
-  alias AetherS3.ObjectMeta.Store, as: ObjectMeta
   alias AetherS3.ControlPlane.Store, as: ControlPlane
-  alias AetherS3.Storage.MultipartSession
+  alias AetherS3.Storage.Multipart
   alias AetherS3.Replication.Coordinator
 
   plug(AetherS3.Plug.SigV4)
@@ -53,6 +52,22 @@ defmodule AetherS3.Router do
     range = conn |> get_req_header("range") |> List.first()
 
     case Coordinator.locate(bucket, key) do
+      {:ok, %{parts: parts} = meta, _node} ->
+        conn =
+          conn
+          |> put_resp_header("content-type", meta.content_type)
+          |> put_resp_header("last-modified", http_date(meta.last_modified))
+
+        case Streamer.egress_manifest(
+               conn,
+               parts,
+               &Coordinator.locate(Multipart.bucket(), &1.key),
+               range: range
+             ) do
+          {:error, :missing_part} -> send_resp(conn, 500, "")
+          conn -> conn
+        end
+
       {:ok, meta, node} ->
         conn =
           conn
@@ -82,14 +97,14 @@ defmodule AetherS3.Router do
 
     cond do
       Map.has_key?(conn.query_params, "uploads") ->
-        upload_id = :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
+        # Stateless: no session to start — the upload id just namespaces the part
+        # objects we'll store under the reserved bucket.
+        upload_id = Multipart.new_upload_id()
 
-        {:ok, _pid} =
-          DynamicSupervisor.start_child(
-            AetherS3.UploadSupervisor,
-            {MultipartSession, %{upload_id: upload_id, bucket: bucket, key: key}}
-          )
+        content_type =
+          conn |> get_req_header("content-type") |> List.first() || "application/octet-stream"
 
+        Coordinator.put_upload_meta(upload_id, content_type)
         send_xml(conn, 200, XML.initiate_multipart(bucket, key, upload_id))
 
       Map.has_key?(conn.query_params, "uploadId") ->
@@ -97,21 +112,13 @@ defmodule AetherS3.Router do
         {:ok, body, conn} = read_body(conn, length: 2_000_000)
         requested = XML.parse_complete(body)
 
-        case MultipartSession.complete(upload_id, requested) do
-          {:ok, paths} ->
-            dest = BlobStore.path(bucket, key)
-            {:ok, %{size: size, etag: etag}} = Streamer.assemble(paths, dest)
-
-            :ok =
-              ObjectMeta.put(bucket, key, %{
-                size: size,
-                etag: etag,
-                content_type: "application/octet-stream",
-                last_modified: DateTime.utc_now()
-              })
-
-            # stops the session; its terminate/2 deletes the now-redundant temp parts
-            MultipartSession.abort(upload_id)
+        case Coordinator.complete_multipart(
+               bucket,
+               key,
+               upload_id,
+               requested
+             ) do
+          {:ok, etag} ->
             send_xml(conn, 200, XML.complete_multipart(bucket, key, etag))
 
           {:error, :invalid_part} ->
@@ -153,12 +160,13 @@ defmodule AetherS3.Router do
     case conn.query_params do
       %{"partNumber" => pn, "uploadId" => upload_id} ->
         part_number = String.to_integer(pn)
-        path = BlobStore.multipart_part_path(upload_id, part_number)
 
-        case Streamer.ingest(conn, path) do
-          {:ok, %{size: size, etag: etag}} ->
-            :ok = MultipartSession.register_part(upload_id, part_number, etag, size, path)
+        # A part is just a normal replicated object under the reserved bucket;
+        # Complete will discover it by prefix scan and reference it in the manifest.
+        part_key = Multipart.part_key(upload_id, part_number)
 
+        case Coordinator.put(conn, Multipart.bucket(), part_key, "application/octet-stream") do
+          {:ok, etag} ->
             conn
             |> put_resp_header("etag", ~s("#{etag}"))
             |> send_resp(200, "")
@@ -206,12 +214,8 @@ defmodule AetherS3.Router do
 
     case conn.query_params do
       %{"uploadId" => upload_id} ->
-        # abort: stop the session if it's still alive (terminate/2 cleans temp parts)
-        case GenServer.whereis(MultipartSession.via(upload_id)) do
-          nil -> :ok
-          _pid -> MultipartSession.abort(upload_id)
-        end
-
+        # abort: delete every part object stored under this upload
+        Coordinator.abort_multipart(upload_id)
         send_resp(conn, 204, "")
 
       _ ->

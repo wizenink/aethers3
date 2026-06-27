@@ -88,7 +88,11 @@ defmodule AetherS3.RouterTest do
   test "full multipart upload assembles the parts", %{bucket: bucket} do
     call(conn(:put, "/#{bucket}"))
 
-    init = call(conn(:post, "/#{bucket}/big.bin?uploads"))
+    init =
+      conn(:post, "/#{bucket}/big.bin?uploads")
+      |> put_req_header("content-type", "text/plain")
+      |> call()
+
     assert init.status == 200
     assert [_, upload_id] = Regex.run(~r{<UploadId>([^<]+)</UploadId>}, init.resp_body)
 
@@ -106,9 +110,51 @@ defmodule AetherS3.RouterTest do
 
     comp = call(conn(:post, "/#{bucket}/big.bin?uploadId=#{upload_id}", body))
     assert comp.status == 200
+    # completed object carries the S3 multipart ETag: <md5>-<part count>
+    assert comp.resp_body =~ ~r|<ETag>"[0-9a-f]{32}-2"</ETag>|
 
     get = call(conn(:get, "/#{bucket}/big.bin"))
     assert get.resp_body == "AAAABBBB"
+
+    # HEAD reports the total assembled size and the content-type set at Initiate
+    head = call(conn(:head, "/#{bucket}/big.bin"))
+    assert get_resp_header(head, "content-length") == ["8"]
+    assert get_resp_header(head, "content-type") == ["text/plain"]
+
+    # a range can span the part boundary (bytes 2-5 of "AAAABBBB" = "AABB")
+    ranged =
+      conn(:get, "/#{bucket}/big.bin")
+      |> put_req_header("range", "bytes=2-5")
+      |> call()
+
+    assert ranged.status == 206
+    assert ranged.resp_body == "AABB"
+    assert get_resp_header(ranged, "content-range") == ["bytes 2-5/8"]
+  end
+
+  test "deleting a multipart object cascades to its part objects", %{bucket: bucket} do
+    call(conn(:put, "/#{bucket}"))
+
+    init = call(conn(:post, "/#{bucket}/doomed.bin?uploads"))
+    [_, upload_id] = Regex.run(~r{<UploadId>([^<]+)</UploadId>}, init.resp_body)
+
+    p1 = call(conn(:put, "/#{bucket}/doomed.bin?partNumber=1&uploadId=#{upload_id}", "AAAA"))
+    [e1] = get_resp_header(p1, "etag")
+
+    body =
+      "<CompleteMultipartUpload>" <>
+        "<Part><PartNumber>1</PartNumber><ETag>#{e1}</ETag></Part>" <>
+        "</CompleteMultipartUpload>"
+
+    assert call(conn(:post, "/#{bucket}/doomed.bin?uploadId=#{upload_id}", body)).status == 200
+
+    # the backing part is a real object under the reserved bucket
+    assert call(conn(:get, "/__mpu__/#{upload_id}/1")).status == 200
+
+    assert call(conn(:delete, "/#{bucket}/doomed.bin")).status == 204
+    # both the object and its backing part are gone
+    assert call(conn(:get, "/#{bucket}/doomed.bin")).status == 404
+    assert call(conn(:get, "/__mpu__/#{upload_id}/1")).status == 404
   end
 
   test "aborting a multipart upload discards it", %{bucket: bucket} do

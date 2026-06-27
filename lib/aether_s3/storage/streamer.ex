@@ -1,4 +1,6 @@
 defmodule AetherS3.Storage.Streamer do
+  alias AetherS3.Storage.{BlobStore, Multipart}
+
   @chunk 1_000_000
 
   @spec ingest(String.t(), String.t()) ::
@@ -116,6 +118,95 @@ defmodule AetherS3.Storage.Streamer do
       case Plug.Conn.chunk(conn, bytes) do
         {:ok, conn} -> {:cont, conn}
         {:error, :closed} -> {:halt, conn}
+      end
+    end)
+  end
+
+  @doc """
+  Stream a manifest (multipart) object: a sequence of part blobs, each a normal
+  replicated object, concatenated on the wire in order. `parts` is the manifest
+  list (`%{key:, size:, ...}`); `locate` is a function that maps a part to its
+  holder — `locate.(part) -> {:ok, part_meta, node} | :not_found` — so this stays
+  decoupled from the Coordinator.
+
+  Resolves every part's holder *before* sending any bytes, so a missing part is a
+  clean `{:error, :missing_part}` (status can't change once chunking starts).
+  """
+  def egress_manifest(conn, parts, locate, opts \\ []) do
+    total = parts |> Enum.map(& &1.size) |> Enum.sum()
+
+    {status, lo, hi, conn} =
+      case parse_range(Keyword.get(opts, :range), total) do
+        :none ->
+          {200, 0, total - 1, conn}
+
+        {first, last} ->
+          conn =
+            Plug.Conn.put_resp_header(conn, "content-range", "bytes #{first}-#{last}/#{total}")
+
+          {206, first, last, conn}
+      end
+
+    # Only the parts the range overlaps, each tagged with its in-part slice, then
+    # locate just those (a small range touches one or two parts, not all of them).
+    located =
+      parts
+      |> select_parts(lo, hi)
+      |> Enum.map(fn {part, skip, take} -> {part, locate.(part), skip, take} end)
+
+    if Enum.any?(located, fn {_part, res, _skip, _take} -> res == :not_found end) do
+      {:error, :missing_part}
+    else
+      conn =
+        conn
+        |> Plug.Conn.put_resp_header("accept-ranges", "bytes")
+        |> Plug.Conn.send_chunked(status)
+
+      bucket = Multipart.bucket()
+
+      Enum.reduce_while(located, conn, fn {part, {:ok, _meta, node}, skip, take}, conn ->
+        stream =
+          if node == Node.self() do
+            stream_slice(BlobStore.path(bucket, part.key), skip, take)
+          else
+            remote_slice(node, bucket, part.key, skip, take)
+          end
+
+        pump(stream, conn)
+      end)
+    end
+  end
+
+  # Given the absolute byte range [lo, hi] (inclusive), pick the parts it overlaps
+  # and compute each one's in-part slice. Returns [{part, skip, take}] in order.
+  defp select_parts(parts, lo, hi) do
+    {selected, _offset} =
+      Enum.reduce(parts, {[], 0}, fn part, {acc, offset} ->
+        part_start = offset
+        part_end = offset + part.size - 1
+        from = max(lo, part_start)
+        to = min(hi, part_end)
+
+        acc =
+          if from > to do
+            acc
+          else
+            [{part, from - part_start, to - from + 1} | acc]
+          end
+
+        {acc, offset + part.size}
+      end)
+
+    Enum.reverse(selected)
+  end
+
+  # Relay a byte stream to the client, chunk by chunk. Returns a reduce_while
+  # tuple so callers can drive it over many parts and stop if the peer hangs up.
+  defp pump(stream, conn) do
+    Enum.reduce_while(stream, {:cont, conn}, fn bytes, {:cont, conn} ->
+      case Plug.Conn.chunk(conn, bytes) do
+        {:ok, conn} -> {:cont, {:cont, conn}}
+        {:error, :closed} -> {:halt, {:halt, conn}}
       end
     end)
   end

@@ -15,8 +15,4 @@ defmodule AetherS3.Storage.BlobStoreTest do
     path = BlobStore.path("photos", "2024/cat.jpg")
     assert path =~ ~r"/blobs/photos/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{64}$"
   end
-
-  test "multipart_part_path groups parts by upload id and number" do
-    assert BlobStore.multipart_part_path("U1", 3) =~ ~r"/multipart/U1/3$"
-  end
 end

@@ -16,8 +16,6 @@ defmodule AetherS3.Application do
           ),
           {AetherS3.ControlPlane.Khepri, name: AetherS3.ControlPlane.Khepri},
           {AetherS3.ControlPlane.Cluster, name: AetherS3.ControlPlane.Cluster},
-          {Registry, keys: :unique, name: AetherS3.UploadRegistry},
-          {DynamicSupervisor, strategy: :one_for_one, name: AetherS3.UploadSupervisor},
           {AetherS3.Replication.AntiEntropy, name: AetherS3.Replication.AntiEntropy},
           {Bandit, plug: AetherS3.Router, scheme: :http, port: port}
         ]
