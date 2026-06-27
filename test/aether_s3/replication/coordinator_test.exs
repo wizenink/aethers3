@@ -29,4 +29,19 @@ defmodule AetherS3.Replication.CoordinatorTest do
     # :a is stale, :c is missing; :b (the winner) is never a target
     assert Enum.sort(targets) == [:a, :c]
   end
+
+  describe "resolve_w/2 (write quorum)" do
+    test "integer W is used as-is and clamped to [1, n]" do
+      assert Coordinator.resolve_w(3, 1) == 1
+      assert Coordinator.resolve_w(3, 2) == 2
+      assert Coordinator.resolve_w(3, 5) == 3
+      assert Coordinator.resolve_w(3, 0) == 1
+    end
+
+    test ":quorum is a majority, :all is every replica" do
+      assert Coordinator.resolve_w(3, :quorum) == 2
+      assert Coordinator.resolve_w(4, :quorum) == 3
+      assert Coordinator.resolve_w(3, :all) == 3
+    end
+  end
 end

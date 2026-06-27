@@ -11,10 +11,16 @@ defmodule AetherS3.Replication.Coordinator do
 
   def put(conn, bucket, key, content_type) do
     replicas = RingServer.replicas("#{bucket}/#{key}")
-    staged = BlobStore.path(bucket, key)
+    final = BlobStore.path(bucket, key)
+    staged = "#{final}.#{rand_token()}.staging"
 
     case Streamer.ingest(conn, staged) do
       {:ok, %{size: size, etag: etag}} ->
+        # Atomic local publish: concurrent PUTs of the same key each ingest their
+        # own temp, then rename — last writer wins, never an interleaved/corrupt
+        # blob, and a crash leaves an orphan temp instead of a half-written final.
+        :ok = File.rename(staged, final)
+
         meta = %{
           size: size,
           etag: etag,
@@ -22,38 +28,80 @@ defmodule AetherS3.Replication.Coordinator do
           last_modified: DateTime.utc_now()
         }
 
-        # W=1: first replica synchronously, then return. The rest replicate in the
-        # background; once done, drop our staging copy if this coordinator isn't
-        # itself a replica — otherwise it leaks an orphan blob.
+        # Replicate to W replicas synchronously before acking; the rest go in the
+        # background. Individual replica failures don't crash the write — they just
+        # don't count toward W (and heal later via read-repair / anti-entropy).
         #
-        # TODO: This only covers the happy path. Crash/partition orphans and failed
-        # replications are NOT cleaned here — they need an anti-entropy reaper 
-        # that sweeps blobs lacking local metadata + not owned by this node per HRW.
-        # The cleaner long-term design is "route-to-primary": stream the body to the HRW
-        # primary, which stages and fans out, so bytes only ever land on replicas and no
-        # staging orphan is ever created (also unifies the multipart write path).
-        # TODO: make W configurable (W>=2) for stronger durability-before-ack.
-        [head | tail] = replicas
-        :ok = replicate_to(head, bucket, key, staged, meta)
-        Logger.info("stored #{bucket}/#{key} (#{size}B etag=#{etag}) → #{inspect(replicas)}")
+        # TODO: crash/partition orphans + failed replications still need an
+        # anti-entropy reaper (sweep blobs lacking local metadata + not HRW-owned).
+        # The cleaner long-term design is "route-to-primary": stream the body to the
+        # HRW primary, which stages and fans out, so bytes only land on replicas.
+        # W resolves against the replication factor (intended N), NOT the live
+        # replica count — otherwise losing replicas would silently shrink W and
+        # defeat the durability guarantee. If fewer than W live replicas exist,
+        # sync_replicate can't reach W and the write is rejected.
+        rf = Application.get_env(:aether_s3, :replication_factor, 3)
+        w = resolve_w(rf, Application.get_env(:aether_s3, :write_quorum, 1))
 
-        Task.start(fn ->
-          Enum.each(tail, fn t -> replicate_to(t, bucket, key, staged, meta) end)
-          unless Node.self() in replicas, do: File.rm(staged)
-        end)
+        case sync_replicate(replicas, w, bucket, key, final, meta) do
+          {:ok, succeeded} ->
+            Logger.info(
+              "stored #{bucket}/#{key} (#{size}B etag=#{etag}) W=#{w} → #{inspect(succeeded)}"
+            )
 
-        {:ok, etag}
+            Task.start(fn ->
+              Enum.each(replicas -- succeeded, fn t ->
+                replicate_to(t, bucket, key, final, meta)
+              end)
+
+              unless Node.self() in replicas, do: File.rm(final)
+            end)
+
+            {:ok, etag}
+
+          {:error, :insufficient_replicas} = err ->
+            unless Node.self() in replicas, do: File.rm(final)
+            err
+        end
 
       {:error, reason} ->
+        File.rm(staged)
         {:error, reason}
     end
   end
+
+  @doc """
+  Resolve the write quorum W against the replication factor `n` (intended N, not
+  the live replica count). `setting` is an integer (clamped to `[1, n]`),
+  `:quorum` (⌊n/2⌋+1), or `:all` (n).
+  """
+  def resolve_w(n, setting) do
+    case setting do
+      :quorum -> div(n, 2) + 1
+      :all -> n
+      w when is_integer(w) -> w |> max(1) |> min(n)
+    end
+  end
+
+  # Replicate in HRW order until W replicas ack, tolerating individual failures.
+  # Returns {:ok, acked_nodes} if at least W succeeded, else :insufficient_replicas.
+  defp sync_replicate(replicas, w, bucket, key, staged, meta) do
+    succeeded =
+      Enum.reduce_while(replicas, [], fn node, acc ->
+        acc = if replicate_to(node, bucket, key, staged, meta) == :ok, do: [node | acc], else: acc
+        if length(acc) >= w, do: {:halt, acc}, else: {:cont, acc}
+      end)
+
+    if length(succeeded) >= w, do: {:ok, succeeded}, else: {:error, :insufficient_replicas}
+  end
+
+  defp rand_token, do: Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
 
   def push_blob(target, bucket, key, meta) do
     staged = BlobStore.path(bucket, key)
     # unique per-push token so the target stages to its own temp file; concurrent
     # pushes to the same key can't interleave (each renames atomically on finish).
-    token = Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
+    token = rand_token()
     :ok = :erpc.call(target, Receiver, :begin, [bucket, key, token])
 
     staged

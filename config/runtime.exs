@@ -22,6 +22,18 @@ if config_env() != :test do
          :replication_factor,
          String.to_integer(System.get_env("AETHER_REPLICATION_FACTOR", "3"))
 
+  # Write quorum: replicas that must ack before a PUT returns. Higher W trades
+  # availability for durability (W=2 survives one node loss). Integer, or
+  # "quorum" (majority) / "all". Default 1 (fast, AP, heals async).
+  write_quorum =
+    case System.get_env("AETHER_WRITE_QUORUM", "1") do
+      "quorum" -> :quorum
+      "all" -> :all
+      n -> String.to_integer(n)
+    end
+
+  config :aether_s3, :write_quorum, write_quorum
+
   # Cluster discovery strategy, chosen per deployment:
   #   * AETHER_DNS_QUERY set  -> DNSPoll: resolve that DNS name to peer IPs and
   #     connect to <basename>@<ip> (works across machines/containers/k8s where a

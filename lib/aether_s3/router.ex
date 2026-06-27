@@ -171,6 +171,17 @@ defmodule AetherS3.Router do
             |> put_resp_header("etag", ~s("#{etag}"))
             |> send_resp(200, "")
 
+          {:error, :insufficient_replicas} ->
+            send_xml(
+              conn,
+              503,
+              XML.error(
+                "ServiceUnavailable",
+                "Not enough replicas to store part.",
+                conn.request_path
+              )
+            )
+
           {:error, _reason} ->
             send_xml(
               conn,
@@ -189,6 +200,17 @@ defmodule AetherS3.Router do
               conn
               |> put_resp_header("etag", ~s("#{etag}"))
               |> send_resp(200, "")
+
+            {:error, :insufficient_replicas} ->
+              send_xml(
+                conn,
+                503,
+                XML.error(
+                  "ServiceUnavailable",
+                  "Not enough replicas to store object.",
+                  conn.request_path
+                )
+              )
 
             {:error, _reason} ->
               send_xml(
