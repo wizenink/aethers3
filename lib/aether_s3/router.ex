@@ -51,7 +51,7 @@ defmodule AetherS3.Router do
     key = Enum.join(conn.params["key"], "/")
     range = conn |> get_req_header("range") |> List.first()
 
-    case Coordinator.locate(bucket, key) do
+    case Coordinator.locate_repair(bucket, key) do
       {:ok, %{parts: parts} = meta, _node} ->
         conn =
           conn
@@ -61,7 +61,7 @@ defmodule AetherS3.Router do
         case Streamer.egress_manifest(
                conn,
                parts,
-               &Coordinator.locate(Multipart.bucket(), &1.key),
+               &Coordinator.locate_repair(Multipart.bucket(), &1.key),
                range: range
              ) do
           {:error, :missing_part} -> send_resp(conn, 500, "")
@@ -138,7 +138,7 @@ defmodule AetherS3.Router do
     bucket = conn.params["bucket"]
     key = Enum.join(conn.params["key"], "/")
 
-    case Coordinator.locate(bucket, key) do
+    case Coordinator.locate_repair(bucket, key) do
       {:ok, meta, _node} ->
         conn
         |> put_resp_header("etag", ~s("#{meta.etag}"))

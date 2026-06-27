@@ -2,19 +2,31 @@ defmodule AetherS3.Replication.Receiver do
   alias AetherS3.Storage.BlobStore
   alias AetherS3.ObjectMeta.Store, as: ObjectMeta
 
-  def begin(bucket, key) do
-    path = BlobStore.path(bucket, key)
-    File.mkdir_p!(Path.dirname(path))
-    File.rm(path)
+  # A blob push is staged to a per-push temp file (keyed by a unique `token`) and
+  # atomically renamed into place on `finish/4`. This makes concurrent pushes to
+  # the same key safe — last rename wins, no interleaved appends or rm-mid-write —
+  # and crash-safe: a crash leaves an orphan temp, never a half-written blob at
+  # the real path. `commit/3` (meta-only) stays for manifest objects / markers,
+  # which have no blob.
+
+  def begin(bucket, key, token) do
+    File.mkdir_p!(Path.dirname(BlobStore.path(bucket, key)))
+    File.rm(tmp_path(bucket, key, token))
     :ok
   end
 
-  def write_chunk(bucket, key, chunk) do
-    path = BlobStore.path(bucket, key)
-    File.write!(path, chunk, [:append])
+  def write_chunk(bucket, key, token, chunk) do
+    File.write!(tmp_path(bucket, key, token), chunk, [:append])
     :ok
   end
 
+  # Atomically publish the staged blob, then write metadata (metadata-last).
+  def finish(bucket, key, token, meta) do
+    :ok = File.rename(tmp_path(bucket, key, token), BlobStore.path(bucket, key))
+    commit(bucket, key, meta)
+  end
+
+  # Meta-only write — used for manifest objects and upload markers (no blob).
   def commit(bucket, key, meta) do
     ObjectMeta.put(bucket, key, meta)
   end
@@ -24,4 +36,6 @@ defmodule AetherS3.Replication.Receiver do
     File.rm(BlobStore.path(bucket, key))
     :ok
   end
+
+  defp tmp_path(bucket, key, token), do: "#{BlobStore.path(bucket, key)}.#{token}.tmp"
 end

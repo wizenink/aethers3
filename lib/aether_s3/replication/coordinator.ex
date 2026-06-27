@@ -51,15 +51,18 @@ defmodule AetherS3.Replication.Coordinator do
 
   def push_blob(target, bucket, key, meta) do
     staged = BlobStore.path(bucket, key)
-    :ok = :erpc.call(target, Receiver, :begin, [bucket, key])
+    # unique per-push token so the target stages to its own temp file; concurrent
+    # pushes to the same key can't interleave (each renames atomically on finish).
+    token = Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
+    :ok = :erpc.call(target, Receiver, :begin, [bucket, key, token])
 
     staged
     |> File.stream!(@chunk)
     |> Enum.each(fn chunk ->
-      :ok = :erpc.call(target, Receiver, :write_chunk, [bucket, key, chunk])
+      :ok = :erpc.call(target, Receiver, :write_chunk, [bucket, key, token, chunk])
     end)
 
-    :erpc.call(target, Receiver, :commit, [bucket, key, meta])
+    :erpc.call(target, Receiver, :finish, [bucket, key, token, meta])
   rescue
     e ->
       Logger.warning("push_blob to #{target} failed: #{inspect(e)}")
@@ -79,6 +82,77 @@ defmodule AetherS3.Replication.Coordinator do
         :not_found -> nil
       end
     end)
+  end
+
+  @doc """
+  Like `locate/2`, but read-repairing: queries every replica, serves the LWW
+  winner (freshest `last_modified`), and asynchronously pushes the winner's data
+  to any replica that is missing it or stale. Use this on client read paths
+  (GET/HEAD); internal callers keep the cheaper first-found `locate/2`.
+
+  TODO: replica metas are queried sequentially (RF RPCs per read). Parallelize
+  with `Task.async_stream` to bound read latency to the slowest single replica.
+  """
+  def locate_repair(bucket, key) do
+    replicas = RingServer.replicas("#{bucket}/#{key}")
+    results = Enum.map(replicas, fn node -> {node, get_meta_from(node, bucket, key)} end)
+
+    case plan(replicas, results) do
+      :not_found ->
+        :not_found
+
+      {winner_node, winner_meta, targets} ->
+        unless targets == [] do
+          Task.start(fn ->
+            Enum.each(targets, fn t -> repair_one(winner_node, t, bucket, key, winner_meta) end)
+          end)
+        end
+
+        {:ok, winner_meta, winner_node}
+    end
+  end
+
+  @doc """
+  Pure read-repair planning: given the replica order and each replica's meta
+  lookup result (`[{node, {:ok, meta} | :not_found}]`), return `:not_found` if no
+  replica has the object, else `{winner_node, winner_meta, repair_targets}` where
+  the winner is the LWW (freshest) copy and targets are the stale/missing peers.
+  """
+  def plan(replicas, results) do
+    present = for {n, {:ok, m}} <- results, do: {n, m}
+
+    case present do
+      [] ->
+        :not_found
+
+      _ ->
+        {winner_node, winner_meta} =
+          Enum.max_by(present, fn {_n, m} -> m.last_modified end, DateTime)
+
+        targets = for n <- replicas, n != winner_node, stale?(n, results, winner_meta), do: n
+        {winner_node, winner_meta, targets}
+    end
+  end
+
+  defp stale?(node, results, winner_meta) do
+    case List.keyfind(results, node, 0) do
+      {_, {:ok, m}} -> DateTime.compare(m.last_modified, winner_meta.last_modified) == :lt
+      _ -> true
+    end
+  end
+
+  # Manifest winner has no blob — repair its meta only (we hold it here).
+  defp repair_one(_winner, target, bucket, key, %{parts: _} = meta) do
+    commit_meta(target, bucket, key, meta)
+  end
+
+  # Normal object: the winner holds the bytes, so it must do the push.
+  defp repair_one(winner, target, bucket, key, meta) do
+    if winner == Node.self() do
+      push_blob(target, bucket, key, meta)
+    else
+      :erpc.call(winner, __MODULE__, :push_blob, [target, bucket, key, meta])
+    end
   end
 
   def delete(bucket, key) do
