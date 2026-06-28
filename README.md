@@ -136,8 +136,13 @@ All runtime configuration is via environment variables.
 
 Discovery precedence: `AETHER_PEERS` → `AETHER_DNS_QUERY` → `AETHER_GOSSIP` → LocalEpmd (same-host dev default).
 
-BEAM/release variables also apply: `RELEASE_NODE`, `RELEASE_COOKIE`,
-`RELEASE_DISTRIBUTION`.
+Node name and cookie are BEAM-level (set before the app boots, so they can't go
+in the TOML file). Use `AETHER_NODE` / `AETHER_COOKIE` (friendly aliases), or the
+underlying `RELEASE_NODE` / `RELEASE_COOKIE` (an explicit `RELEASE_*` wins). The
+node name must be an IP or FQDN — see "Cluster discovery" below. `RELEASE_DISTRIBUTION`
+defaults to `name`. The cookie can also be a `~/.erlang.cookie` file (mode 0400),
+which is the preferred prod approach. (These aliases are wired in `rel/env.sh.eex`,
+which applies on Linux and macOS; Windows would need a `rel/env.bat.eex`.)
 
 The default credentials are for local development only. Set real ones, turn on
 auth, and use a private cookie before exposing a node.
@@ -202,9 +207,8 @@ Gossip auto-discovers peers via UDP multicast — no static list or DNS needed.
 On each VM, run the release (or the Burrito binary) with:
 
 ```sh
-RELEASE_NODE=aether@<this-vm-ip> \
-RELEASE_COOKIE=<shared-secret> \
-RELEASE_DISTRIBUTION=name \
+AETHER_NODE=aether@<this-vm-ip> \
+AETHER_COOKIE=<shared-secret> \
 AETHER_GOSSIP=true \
 AETHER_GOSSIP_SECRET=<shared-gossip-secret> \
 AETHER_DATA_DIR=/var/lib/aether_s3 \
@@ -237,8 +241,5 @@ Known gaps and future work:
   evicting dead members, and split-brain merge all need work. Today a Khepri
   `join` makes the joiner adopt the cluster's state and discard its own, so a
   control-plane write during the brief formation window can be lost.
-- Multipart uploads are not yet cluster-aware.
-- No read-repair on the read path (anti-entropy handles drift in the
-  background).
 - No metrics/telemetry export yet.
 - Orphaned blob sweeping is not implemented.
