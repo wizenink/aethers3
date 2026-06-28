@@ -47,3 +47,45 @@ jobs:
 
       - name: Run tests
         run: mix test
+
+  e2e-same-host:
+    name: E2E (same-host multi-node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Elixir/OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.20"
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Verify S3 client (aws-cli)
+        run: aws --version
+
+      - name: Run same-host multi-node e2e
+        run: bash test/e2e/same_host.sh
+
+  e2e-docker:
+    name: E2E (docker cluster)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ubuntu-latest ships Docker + the compose plugin; the amazon/aws-cli image
+      # (the S3 client) is pulled by the script at runtime.
+      - name: Run docker cluster e2e
+        run: bash test/e2e/docker_cluster.sh

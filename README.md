@@ -223,10 +223,21 @@ distribution. Running the release directly on the VM avoids that.
 
 ## Tests
 
+Unit tests (fast, in-process):
+
 ```sh
 mix test
 mix format --check-formatted
 mix compile --warnings-as-errors
+```
+
+End-to-end tests drive a **real S3 client** (aws-cli) against an actual cluster
+and verify the cross-node guarantees (write to one node, read from another;
+multipart; ranged GET; delete; list). Both run in CI:
+
+```sh
+test/e2e/same_host.sh       # 3 nodes on one host (LocalEpmd); needs elixir + aws-cli
+test/e2e/docker_cluster.sh  # 3 containers (DNSPoll); needs docker (uses the amazon/aws-cli image)
 ```
 
 ## Status and limitations
