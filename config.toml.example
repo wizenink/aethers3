@@ -22,9 +22,14 @@ require_auth = true
 [credentials]
 AKIAEXAMPLE = "change-me"
 
-# Cluster discovery. strategy = "dns" (DNSPoll across machines/containers/k8s)
-# or "epmd" (same-host dev). For "dns", dns_query must resolve to all node IPs.
+# Cluster discovery. Pick ONE strategy:
+#   "dns"    -> DNSPoll: dns_query resolves to all node IPs (containers/k8s)
+#   "epmd"   -> static list of node names in `peers`
+#   "gossip" -> UDP-multicast auto-discovery on the LAN (VMs, e.g. Proxmox)
+# Node names must be an IP or an FQDN (dotted) — a bare short hostname is rejected.
 [cluster]
-strategy = "dns"
-dns_query = "aether.internal"
-node_basename = "aether"
+strategy = "gossip"
+secret = "shared-gossip-secret"        # for "gossip" (optional but recommended)
+# dns_query = "aether.internal"        # for "dns"
+# node_basename = "aether"             # for "dns"
+# peers = ["aether@n1.lan", "aether@n2.lan", "aether@n3.lan"]   # for "epmd"

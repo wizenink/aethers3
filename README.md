@@ -127,9 +127,14 @@ All runtime configuration is via environment variables.
 | `AETHER_SECRET_KEY` | `devsecret` | S3 secret key (development default). |
 | `AETHER_REPLICATION_FACTOR` | `3` | Number of replicas per object. |
 | `AETHER_WRITE_QUORUM` | `1` | Replicas that must ack before a PUT returns: an integer, `quorum`, or `all`. Higher = more durable, less available. |
-| `AETHER_DNS_QUERY` | _(unset)_ | If set, use DNSPoll discovery against this DNS name; otherwise LocalEpmd (same-host). |
+| `AETHER_PEERS` | _(unset)_ | Comma-separated static node list → Epmd discovery (e.g. `aether@n1,aether@n2`). |
+| `AETHER_DNS_QUERY` | _(unset)_ | DNS name → DNSPoll discovery (resolve to peer IPs). |
+| `AETHER_GOSSIP` | _(unset)_ | `true` → Gossip discovery (UDP multicast on the LAN; good for VMs). |
+| `AETHER_GOSSIP_SECRET` | _(unset)_ | Optional shared secret encrypting gossip, so only nodes that share it join. |
 | `AETHER_NODE_BASENAME` | `aether` | Node basename used to build peer node names under DNSPoll. |
 | `AETHER_CONFIG` | `/etc/aether_s3/config.toml` | Path to the production TOML config file (see below). |
+
+Discovery precedence: `AETHER_PEERS` → `AETHER_DNS_QUERY` → `AETHER_GOSSIP` → LocalEpmd (same-host dev default).
 
 BEAM/release variables also apply: `RELEASE_NODE`, `RELEASE_COOKIE`,
 `RELEASE_DISTRIBUTION`.
@@ -154,9 +159,11 @@ require_auth = true
 AKIAEXAMPLE = "change-me"
 
 [cluster]
-strategy = "dns"          # "dns" (DNSPoll) or "epmd" (same-host)
-dns_query = "aether.internal"
+strategy = "dns"          # "dns" | "epmd" (static list) | "gossip" (LAN multicast)
+dns_query = "aether.internal"   # for "dns"
 node_basename = "aether"
+# peers  = ["aether@n1", "aether@n2", "aether@n3"]   # for "epmd"
+# secret = "shared-gossip-secret"                      # for "gossip"
 ```
 
 For Docker, mount the file in (e.g. `-v ./config.toml:/etc/aether_s3/config.toml`);
@@ -166,16 +173,49 @@ for the Burrito binary it just needs to exist at that path on the host. The node
 
 ## Cluster discovery across machines
 
-The discovery strategy is chosen at runtime from the environment:
+Discovery only decides how nodes *find* each other's names; once found, every
+strategy connects over the same BEAM transport. So two things always apply:
 
-- **No `AETHER_DNS_QUERY`** → LocalEpmd, same-host only (local dev).
-- **`AETHER_DNS_QUERY` set** → DNSPoll, which resolves that name to all peer IPs
-  and connects to `<basename>@<ip>`. This is what works across containers, real
-  machines behind a headless DNS record, and Kubernetes.
+- **Node name must be an IP or an FQDN** (contain a dot). With long-name
+  distribution a bare short hostname like `aether1` is rejected
+  (`Hostname ... illegal`) — use `aether@10.0.0.5` or `aether@n1.lan`.
+- **Same cookie** on every node (`RELEASE_COOKIE`, or `~/.erlang.cookie`).
 
-For deployments across separate machines, each node's name must use an IP or
-hostname the other nodes can actually reach, the cookie must match, and epmd
-(4369) plus the distribution port range (9100–9110) must be open between nodes.
+The strategy is chosen at runtime (env or the TOML `[cluster]` block):
+
+| Strategy | Trigger | Best for |
+| --- | --- | --- |
+| LocalEpmd | _(default)_ | same-host dev |
+| Epmd (static) | `AETHER_PEERS=aether@n1,aether@n2,...` | fixed, stable-name nodes |
+| DNSPoll | `AETHER_DNS_QUERY=<dns-name>` | containers / k8s (headless service) |
+| Gossip | `AETHER_GOSSIP=true` | VMs on one LAN (auto-discovery) |
+
+Ports that must be open **between nodes** (on top of the per-strategy channel):
+epmd **TCP 4369** and the distribution range **TCP 9100–9110** (pinned in
+`rel/vm.args.eex`). Per-strategy discovery channel: DNSPoll → DNS (53); Gossip →
+**UDP 45892 multicast**; Epmd/LocalEpmd → none extra. The S3 API (9000) is
+client-facing and unrelated to clustering.
+
+### Running on a LAN of VMs (e.g. Proxmox) with Gossip
+
+Gossip auto-discovers peers via UDP multicast — no static list or DNS needed.
+On each VM, run the release (or the Burrito binary) with:
+
+```sh
+RELEASE_NODE=aether@<this-vm-ip> \
+RELEASE_COOKIE=<shared-secret> \
+RELEASE_DISTRIBUTION=name \
+AETHER_GOSSIP=true \
+AETHER_GOSSIP_SECRET=<shared-gossip-secret> \
+AETHER_DATA_DIR=/var/lib/aether_s3 \
+  bin/aether_s3 start
+```
+
+The VMs must share an L2 network so multicast reaches them (Proxmox VMs on the
+same bridge/VLAN do), with UDP 45892 + TCP 4369 + 9100–9110 open between them.
+If you run it as a **Docker** container on each VM, use host networking
+(`network_mode: host`) — bridged Docker NAT breaks cross-host multicast and
+distribution. Running the release directly on the VM avoids that.
 
 ## Tests
 

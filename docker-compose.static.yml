@@ -1,0 +1,71 @@
+name: aether-static
+
+# A 3-node cluster with STABLE node names (one service per node), unlike the
+# --scale setup (anonymous, IP-named replicas). Each node is aether@aetherN.aethr
+# — stable across restart AND recreate, so a node keeps its Ra identity, the
+# prerequisite for testing wiped-node self-heal (CP member lifecycle #1).
+#
+# Note the ".aethr" suffix: with long-name distribution the host part must be an
+# IP or contain a dot, so a bare "aether1" is rejected ("Hostname ... illegal").
+# The dotted name is published as a network alias so peers can resolve it.
+#
+#   docker compose -f docker-compose.static.yml up --build -d
+#
+# Discovery: static Epmd against the fixed peer list. Each /data is a NAMED
+# VOLUME, so a plain recreate keeps data (normal Ra self-heal), while
+# `docker volume rm aether-static_aether2_data` before recreate gives the
+# wiped-but-same-name case (#1) on demand.
+
+x-aether-env: &aether-env
+  RELEASE_COOKIE: dev-cluster-cookie
+  RELEASE_DISTRIBUTION: name
+  AETHER_PEERS: "aether@aether1.aethr,aether@aether2.aethr,aether@aether3.aethr"
+  AETHER_REQUIRE_AUTH: "false"
+  AETHER_DATA_DIR: /data
+  AETHER_PORT: "9000"
+  AETHER_WRITE_QUORUM: "2"
+
+services:
+  aether1:
+    build: .
+    hostname: aether1.aethr
+    environment:
+      <<: *aether-env
+      RELEASE_NODE: aether@aether1.aethr
+    networks:
+      aether:
+        aliases: [aether1.aethr]
+    volumes:
+      - aether1_data:/data
+
+  aether2:
+    build: .
+    hostname: aether2.aethr
+    environment:
+      <<: *aether-env
+      RELEASE_NODE: aether@aether2.aethr
+    networks:
+      aether:
+        aliases: [aether2.aethr]
+    volumes:
+      - aether2_data:/data
+
+  aether3:
+    build: .
+    hostname: aether3.aethr
+    environment:
+      <<: *aether-env
+      RELEASE_NODE: aether@aether3.aethr
+    networks:
+      aether:
+        aliases: [aether3.aethr]
+    volumes:
+      - aether3_data:/data
+
+volumes:
+  aether1_data:
+  aether2_data:
+  aether3_data:
+
+networks:
+  aether: {}

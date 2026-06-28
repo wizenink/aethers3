@@ -35,16 +35,24 @@ if config_env() != :test do
   config :aether_s3, :write_quorum, write_quorum
 
   # Cluster discovery strategy, chosen per deployment:
+  #   * AETHER_PEERS set      -> Epmd: connect to a static, comma-separated list of
+  #     node names (stable-name deploys). Names must be resolvable; discovery IS
+  #     the list.
   #   * AETHER_DNS_QUERY set  -> DNSPoll: resolve that DNS name to peer IPs and
-  #     connect to <basename>@<ip> (works across machines/containers/k8s where a
-  #     headless service / Docker DNS returns all node IPs).
+  #     connect to <basename>@<ip> (containers/k8s with a headless service).
+  #   * AETHER_GOSSIP=true    -> Gossip: UDP-multicast auto-discovery on the LAN
+  #     (no static list / DNS) — ideal for VMs on one network (e.g. Proxmox).
+  #     Set AETHER_GOSSIP_SECRET to encrypt gossip so only nodes sharing it join.
   #   * otherwise             -> LocalEpmd: same-host discovery, for local dev.
   topologies =
-    case System.get_env("AETHER_DNS_QUERY") do
-      nil ->
-        [aether: [strategy: Cluster.Strategy.LocalEpmd]]
+    cond do
+      peers = System.get_env("AETHER_PEERS") ->
+        hosts =
+          peers |> String.split(",", trim: true) |> Enum.map(&String.to_atom(String.trim(&1)))
 
-      query ->
+        [aether: [strategy: Cluster.Strategy.Epmd, config: [hosts: hosts]]]
+
+      query = System.get_env("AETHER_DNS_QUERY") ->
         [
           aether: [
             strategy: Cluster.Strategy.DNSPoll,
@@ -55,6 +63,14 @@ if config_env() != :test do
             ]
           ]
         ]
+
+      System.get_env("AETHER_GOSSIP") in ["1", "true"] ->
+        secret = System.get_env("AETHER_GOSSIP_SECRET")
+        gossip_config = if secret, do: [secret: secret], else: []
+        [aether: [strategy: Cluster.Strategy.Gossip, config: gossip_config]]
+
+      true ->
+        [aether: [strategy: Cluster.Strategy.LocalEpmd]]
     end
 
   config :libcluster, topologies: topologies
@@ -104,6 +120,14 @@ if File.exists?(toml_path) do
               ]
             ]
           ]
+
+        "epmd" ->
+          hosts = Enum.map(cluster["peers"] || [], &String.to_atom/1)
+          [aether: [strategy: Cluster.Strategy.Epmd, config: [hosts: hosts]]]
+
+        "gossip" ->
+          gossip_config = if s = cluster["secret"], do: [secret: s], else: []
+          [aether: [strategy: Cluster.Strategy.Gossip, config: gossip_config]]
 
         _ ->
           [aether: [strategy: Cluster.Strategy.LocalEpmd]]
