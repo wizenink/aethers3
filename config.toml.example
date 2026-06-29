@@ -18,6 +18,10 @@ write_quorum = "quorum"
 
 require_auth = true
 
+# Control-plane dead-member eviction (opt-in). Seconds a member must be
+# unreachable before the Ra leader evicts it. Omit to disable (safe default).
+# cp_evict_grace = 60
+
 # S3 credentials: access_key = secret_key (one or more pairs).
 [credentials]
 AKIAEXAMPLE = "change-me"

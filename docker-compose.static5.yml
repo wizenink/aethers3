@@ -1,25 +1,16 @@
-name: aether-static
+name: aether-static5
 
-# A 3-node cluster with STABLE node names (one service per node), unlike the
-# --scale setup (anonymous, IP-named replicas). Each node is aether@aetherN.aethr
-# — stable across restart AND recreate, so a node keeps its Ra identity, the
-# prerequisite for testing wiped-node self-heal (CP member lifecycle #1).
+# 5-node stable-name cluster, for testing a split-brain that produces TWO
+# multi-node sides (e.g. 3 vs 2) rather than majority + a lone node. Same shape as
+# docker-compose.static.yml, with five services. Drive it via test/e2e/split_brain.sh:
 #
-# Note the ".aethr" suffix: with long-name distribution the host part must be an
-# IP or contain a dot, so a bare "aether1" is rejected ("Hostname ... illegal").
-# The dotted name is published as a network alias so peers can resolve it.
-#
-#   docker compose -f docker-compose.static.yml up --build -d
-#
-# Discovery: static Epmd against the fixed peer list. Each /data is a NAMED
-# VOLUME, so a plain recreate keeps data (normal Ra self-heal), while
-# `docker volume rm aether-static_aether2_data` before recreate gives the
-# wiped-but-same-name case (#1) on demand.
+#   SB_COMPOSE=docker-compose.static5.yml SB_PROJECT=aether-split5 \
+#   SB_MAJORITY="1 2 3" SB_MINORITY="4 5" test/e2e/split_brain.sh
 
 x-aether-env: &aether-env
   RELEASE_COOKIE: dev-cluster-cookie
   RELEASE_DISTRIBUTION: name
-  AETHER_PEERS: "aether@aether1.aethr,aether@aether2.aethr,aether@aether3.aethr"
+  AETHER_PEERS: "aether@aether1.aethr,aether@aether2.aethr,aether@aether3.aethr,aether@aether4.aethr,aether@aether5.aethr"
   AETHER_REQUIRE_AUTH: "false"
   AETHER_DATA_DIR: /data
   AETHER_PORT: "9000"
@@ -66,10 +57,38 @@ services:
     volumes:
       - aether3_data:/data
 
+  aether4:
+    build: .
+    restart: unless-stopped
+    hostname: aether4.aethr
+    environment:
+      <<: *aether-env
+      RELEASE_NODE: aether@aether4.aethr
+    networks:
+      aether:
+        aliases: [aether4.aethr]
+    volumes:
+      - aether4_data:/data
+
+  aether5:
+    build: .
+    restart: unless-stopped
+    hostname: aether5.aethr
+    environment:
+      <<: *aether-env
+      RELEASE_NODE: aether@aether5.aethr
+    networks:
+      aether:
+        aliases: [aether5.aethr]
+    volumes:
+      - aether5_data:/data
+
 volumes:
   aether1_data:
   aether2_data:
   aether3_data:
+  aether4_data:
+  aether5_data:
 
 networks:
   aether: {}

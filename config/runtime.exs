@@ -34,6 +34,17 @@ if config_env() != :test do
 
   config :aether_s3, :write_quorum, write_quorum
 
+  # Control-plane dead-member eviction is OPT-IN: set AETHER_CP_EVICT_GRACE to a
+  # number of SECONDS a member must be unreachable before the Ra leader evicts it
+  # (one per cycle). Unset/empty = disabled (the safe default — eviction is destructive).
+  case System.get_env("AETHER_CP_EVICT_GRACE") do
+    g when is_binary(g) and g != "" ->
+      config :aether_s3, :cp_evict_grace_ms, String.to_integer(g) * 1000
+
+    _ ->
+      :ok
+  end
+
   # Cluster discovery strategy, chosen per deployment:
   #   * AETHER_PEERS set      -> Epmd: connect to a static, comma-separated list of
   #     node names (stable-name deploys). Names must be resolvable; discovery IS
@@ -90,6 +101,9 @@ if File.exists?(toml_path) do
   if v = toml["data_dir"], do: config(:aether_s3, :data_dir, v)
   if v = toml["replication_factor"], do: config(:aether_s3, :replication_factor, v)
   if v = toml["credentials"], do: config(:aether_s3, :credentials, v)
+
+  # Dead-member eviction grace, in SECONDS (opt-in; omit to disable).
+  if v = toml["cp_evict_grace"], do: config(:aether_s3, :cp_evict_grace_ms, v * 1000)
 
   # require_auth may legitimately be false, so test key presence, not truthiness.
   if Map.has_key?(toml, "require_auth"),

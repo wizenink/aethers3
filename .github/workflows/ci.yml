@@ -89,3 +89,15 @@ jobs:
       # (the S3 client) is pulled by the script at runtime.
       - name: Run docker cluster e2e
         run: bash test/e2e/docker_cluster.sh
+
+  e2e-split-brain:
+    name: E2E (split-brain recovery)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Partitions a 3-node cluster (iptables sidecar in node 3's netns) and
+      # proves control-plane resync + data-plane LWW convergence on heal. Pulls
+      # amazon/aws-cli (S3 client) and nicolaka/netshoot (iptables) at runtime.
+      - name: Run split-brain e2e
+        run: bash test/e2e/split_brain.sh

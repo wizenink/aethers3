@@ -1,55 +1,59 @@
 defmodule AetherS3.ControlPlane.Cluster do
   @moduledoc """
-  Automatically joins this node to the Khepri (Ra) cluster as the BEAM cluster
-  forms (libcluster connects nodes; we react to membership and poll while alone).
+  Keeps this node's membership in the Khepri (Ra) cluster healthy. A single
+  reconcile loop runs three jobs:
 
-  Formation rule (asked in order, while we're still a singleton):
+    1. JOIN / formation — while we're a singleton, join an existing multi-node
+       cluster among our peers, or (if everyone is a singleton) bootstrap by having
+       the smallest-named node be the former and the rest join it. The :nodeup
+       handler also fires a join immediately on reconnect.
 
-    1. If any connected peer is already in a multi-node Ra cluster, JOIN IT —
-       regardless of our own name. (A late, smaller-named node joins the existing
-       cluster instead of isolating itself.)
-    2. Otherwise everyone is a singleton, so we're BOOTSTRAPPING: the smallest
-       node name is the "former" and stays put; the rest join it. Smallest-name
-       is only a tiebreaker to stop N singletons from all joining each other.
+    2. SELF-CORRECT (member lifecycle #3) — if an authoritative peer's member list
+       no longer includes us, we were evicted. The primary recovery is the boot-time
+       gate in `AetherS3.ControlPlane.Khepri` (wipe-before-start), which handles the
+       common case (evicted while down, then restart). This runtime path covers the
+       rarer case of a still-running node that was evicted during a partition: try
+       an in-process stop+wipe+restart, falling back to halt (for a supervisor to
+       restart) only if the local store is too wedged to stop. We act only on a
+       peer's *authoritative* view — an isolated/minority node never wipes itself.
 
-  We retry (poll) while singleton so transient failures (peer not ready, a
-  concurrent Ra membership change) self-heal. Once in a multi-node cluster we stop.
+    3. REAP dead members (member lifecycle #2) — OPT-IN (set `:cp_evict_grace_ms`).
+       Only the Ra leader evicts, at most one member per cycle, and only after a
+       member's node has been unreachable longer than the grace period.
 
-  Network partitions of the control plane are handled by Raft itself: the minority
-  loses write quorum (no divergence) and resyncs from the leader on heal, since
-  membership persists in the Ra log. Our :nodeup handler also re-attempts a join
-  on reconnect.
+  Split-brain safety for #2 is inherited from Raft, not bolted on: removing a member
+  is a quorum-committed log entry, and only the majority partition can elect a
+  leader / commit. The minority has no committing leader, so it cannot evict anyone
+  — there can never be two sides evicting each other. We add leader-gating,
+  one-removal-per-cycle (Raft's single-config-change rule), a generous grace, and #3
+  as the recovery net for a mistakenly-evicted but still-alive node.
 
-  TODO (CP member lifecycle):
-    * Wiped-state restart: a member that restarts with an empty data dir is still
-      listed as a member elsewhere but has no Ra state → Ra identity conflict.
-      Needs detect-empty -> :khepri_cluster.reset -> rejoin (or evict + re-add).
-    * Dead-member eviction: a permanently-down member still counts toward quorum;
-      needs operator/automated removal (:khepri_cluster member removal) to restore
-      the quorum margin.
-  These are membership-lifecycle ops, distinct from data-plane divergence (which
-  is handled by LWW + anti-entropy in AetherS3.Replication).
+  Steady-state data-plane divergence is separate (LWW + read-repair + anti-entropy
+  in AetherS3.Replication); this module only manages Ra cluster membership.
   """
   use GenServer
   require Logger
 
-  @retry_ms 2_000
+  alias AetherS3.ControlPlane.Membership
+
+  @store :khepri
+  @interval 3_000
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
   @impl true
   def init(:ok) do
     :net_kernel.monitor_nodes(true)
-    {:ok, %{}, {:continue, :tick}}
+    {:ok, %{down_since: %{}}, {:continue, :tick}}
   end
 
   @impl true
-  def handle_continue(:tick, state), do: {:noreply, tick(state)}
+  def handle_continue(:tick, state), do: {:noreply, reconcile(state)}
 
   @impl true
-  def handle_info(:tick, state), do: {:noreply, tick(state)}
+  def handle_info(:tick, state), do: {:noreply, reconcile(state)}
 
-  # A new peer appeared: try once immediately (the poll loop handles retries).
+  # A new peer appeared: try a join immediately (the loop handles the rest).
   def handle_info({:nodeup, _node}, state) do
     maybe_join()
     {:noreply, state}
@@ -57,24 +61,30 @@ defmodule AetherS3.ControlPlane.Cluster do
 
   def handle_info({:nodedown, _node}, state), do: {:noreply, state}
 
-  # The single self-rescheduling loop: attempt, and keep polling *only* while
-  # we're still a singleton (so exactly one timer chain, no pileup).
-  defp tick(state) do
+  # One self-rescheduling reconcile loop (a single timer chain, no pileup).
+  # self_correct runs FIRST: it is peer-based and never calls the local Khepri API,
+  # so a node whose local Ra store has wedged can still recover here before
+  # maybe_join/reap touch the (blocking) local store.
+  defp reconcile(state) do
+    self_correct()
     maybe_join()
-    if singleton?(), do: Process.send_after(self(), :tick, @retry_ms)
+    state = maybe_reap(state)
+    Process.send_after(self(), :tick, @interval)
     state
   end
+
+  # --- 1. join / formation ---------------------------------------------------
 
   defp maybe_join do
     if singleton?() do
       peers = Node.list()
 
       cond do
-        # 1. Join an existing multi-node cluster if one exists among our peers.
-        existing = Enum.find(peers, &clustered?/1) ->
+        # Join an existing multi-node cluster if one exists among our peers.
+        existing = Enum.find(peers, &Membership.clustered?/1) ->
           join(existing)
 
-        # 2. Bootstrap: all singletons -> smallest name is former, others join it.
+        # Bootstrap: all singletons -> smallest name is former, others join it.
         peers != [] and Node.self() != Enum.min([Node.self() | peers]) ->
           join(Enum.min([Node.self() | peers]))
 
@@ -95,27 +105,134 @@ defmodule AetherS3.ControlPlane.Cluster do
     end
   end
 
-  # Is THIS node still a one-member Ra cluster?
+  # --- 2. self-correct after eviction (runtime path; boot gate is primary) ----
+
+  defp self_correct do
+    case Membership.authoritative_members() do
+      {:ok, members} ->
+        if Node.self() in members do
+          Membership.mark_clustered()
+        else
+          if Membership.clustered_before?() do
+            Logger.error(
+              "Khepri: evicted from the cluster (a peer's member list excludes us) — " <>
+                "recovering (stop store, wipe Ra state, restart, rejoin)"
+            )
+
+            recover_evicted()
+          end
+        end
+
+      :unknown ->
+        :ok
+    end
+  rescue
+    e -> Logger.warning("Khepri self-correct error: #{inspect(e)}")
+  end
+
+  # In-process recovery for a still-running evicted node. `khepri:stop/0` is a LOCAL
+  # store stop (not a cluster leave like `reset`), so for a live-but-removed server
+  # it works; if the store is too wedged to stop within the timeout, fall back to
+  # halt for a supervisor to restart (and the boot gate then wipes on restart).
+  defp recover_evicted do
+    case stop_store(5_000) do
+      :ok ->
+        Membership.wipe_khepri()
+
+        case :khepri.start(Membership.khepri_dir()) do
+          {:ok, _store} ->
+            Logger.info("Khepri: recovered in place after eviction — rejoining")
+            maybe_join()
+
+          err ->
+            Logger.error("Khepri: restart after wipe failed: #{inspect(err)} — halting")
+            System.halt(1)
+        end
+
+      :timeout ->
+        Logger.error("Khepri: store stop timed out — wiping and halting for supervisor restart")
+        Membership.wipe_khepri()
+        System.halt(1)
+    end
+  end
+
+  defp stop_store(timeout_ms) do
+    task = Task.async(fn -> :khepri.stop() end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task) do
+      {:ok, _} -> :ok
+      _ -> :timeout
+    end
+  end
+
+  # --- 3. reap dead members (opt-in, leader-only, one per cycle) --------------
+
+  defp maybe_reap(state) do
+    grace = Application.get_env(:aether_s3, :cp_evict_grace_ms)
+
+    if is_integer(grace) and leader?() do
+      reap(state, grace)
+    else
+      state
+    end
+  rescue
+    e ->
+      Logger.warning("Khepri reap error: #{inspect(e)}")
+      state
+  end
+
+  defp reap(state, grace) do
+    now = System.monotonic_time(:millisecond)
+    live = [Node.self() | Node.list()]
+    down = member_nodes() -- live
+
+    # Track first-seen-down per node; forget any that have come back.
+    down_since =
+      Enum.reduce(down, Map.take(state.down_since, down), fn n, acc ->
+        Map.put_new(acc, n, now)
+      end)
+
+    # Evict at most ONE: the node that has been down the longest past the grace.
+    victim =
+      down
+      |> Enum.filter(fn n -> now - Map.fetch!(down_since, n) >= grace end)
+      |> Enum.min_by(fn n -> Map.fetch!(down_since, n) end, fn -> nil end)
+
+    case victim do
+      nil ->
+        %{state | down_since: down_since}
+
+      node ->
+        Logger.warning("Khepri: evicting dead member #{node} (unreachable > #{grace}ms)")
+
+        case :ra.remove_member({@store, Node.self()}, {@store, node}) do
+          {:ok, _, _} -> Logger.info("Khepri: evicted #{node}")
+          other -> Logger.warning("Khepri: evict #{node} failed: #{inspect(other)}")
+        end
+
+        %{state | down_since: Map.delete(down_since, node)}
+    end
+  end
+
+  defp leader? do
+    case :ra_leaderboard.lookup_leader(@store) do
+      {@store, leader} -> leader == Node.self()
+      _ -> false
+    end
+  end
+
+  defp member_nodes do
+    case :khepri_cluster.nodes() do
+      {:ok, nodes} -> nodes
+      _ -> []
+    end
+  end
+
+  # Is THIS node still a one-member Ra cluster? (local Khepri call)
   defp singleton? do
     case :khepri_cluster.nodes() do
       {:ok, nodes} -> length(nodes) <= 1
       _ -> true
     end
-  end
-
-  # Is the remote `node` part of a multi-node Ra cluster? (asked over :erpc)
-  defp clustered?(node) do
-    case safe_remote_nodes(node) do
-      {:ok, nodes} -> length(nodes) > 1
-      _ -> false
-    end
-  end
-
-  defp safe_remote_nodes(node) do
-    :erpc.call(node, :khepri_cluster, :nodes, [], 2_000)
-  rescue
-    _ -> :error
-  catch
-    _, _ -> :error
   end
 end

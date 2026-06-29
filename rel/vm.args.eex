@@ -4,3 +4,7 @@
 # reachable between nodes. A range (not a single port) lets several nodes run on
 # one host for local testing; one-node-per-container uses the low end.
 -kernel inet_dist_listen_min 9100 inet_dist_listen_max 9110
+
+# Detect a dead/partitioned peer in ~net_ticktime seconds instead of the 60s
+# default — faster failover for a clustered store (must match across all nodes).
+-kernel net_ticktime 20

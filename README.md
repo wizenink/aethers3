@@ -132,6 +132,7 @@ All runtime configuration is via environment variables.
 | `AETHER_GOSSIP` | _(unset)_ | `true` → Gossip discovery (UDP multicast on the LAN; good for VMs). |
 | `AETHER_GOSSIP_SECRET` | _(unset)_ | Optional shared secret encrypting gossip, so only nodes that share it join. |
 | `AETHER_NODE_BASENAME` | `aether` | Node basename used to build peer node names under DNSPoll. |
+| `AETHER_CP_EVICT_GRACE` | _(unset)_ | Seconds a control-plane member must be unreachable before the Raft leader evicts it. Unset = disabled (opt-in). |
 | `AETHER_CONFIG` | `/etc/aether_s3/config.toml` | Path to the production TOML config file (see below). |
 
 Discovery precedence: `AETHER_PEERS` → `AETHER_DNS_QUERY` → `AETHER_GOSSIP` → LocalEpmd (same-host dev default).
@@ -221,6 +222,30 @@ If you run it as a **Docker** container on each VM, use host networking
 (`network_mode: host`) — bridged Docker NAT breaks cross-host multicast and
 distribution. Running the release directly on the VM avoids that.
 
+### Process supervision (and control-plane self-healing)
+
+Run each node under a process supervisor so it restarts on crash — Docker's
+`restart:` policy, Kubernetes, or, on a bare VM, **systemd**:
+
+```ini
+# /etc/systemd/system/aether.service
+[Service]
+Environment=AETHER_NODE=aether@10.0.0.5
+Environment=AETHER_COOKIE=shared-secret
+Environment=AETHER_GOSSIP=true
+ExecStart=/opt/aether/bin/aether_s3 start
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+```
+
+Control-plane member lifecycle does **not** depend on this, though: dead members
+are evicted by the Raft leader after `AETHER_CP_EVICT_GRACE` (opt-in), and an
+evicted node heals itself **at boot** — before starting Khepri it checks with a
+peer and wipes its stale Raft state if it was removed, then rejoins cleanly. No
+external restart is needed for that path; it only wipes the control-plane log
+(blobs and object metadata are untouched and re-sync from the leader).
+
 ## Tests
 
 Unit tests (fast, in-process):
@@ -233,11 +258,28 @@ mix compile --warnings-as-errors
 
 End-to-end tests drive a **real S3 client** (aws-cli) against an actual cluster
 and verify the cross-node guarantees (write to one node, read from another;
-multipart; ranged GET; delete; list). Both run in CI:
+multipart; ranged GET; delete; list). All run in CI:
 
 ```sh
 test/e2e/same_host.sh       # 3 nodes on one host (LocalEpmd); needs elixir + aws-cli
 test/e2e/docker_cluster.sh  # 3 containers (DNSPoll); needs docker (uses the amazon/aws-cli image)
+test/e2e/split_brain.sh     # partitions a 3-node cluster, proves recovery (see below)
+```
+
+`split_brain.sh` partitions the cluster (an `iptables` sidecar in each minority
+node's network namespace) and asserts the two recovery behaviors: the **control
+plane** (Raft) keeps quorum on the majority and the minority's bucket-create does
+not reach the consistent log during the split, then the minority resyncs on heal;
+and the **data plane** (AP) takes divergent writes to the same key on both sides
+(W=1) and **converges to the last-writer-wins value** on heal.
+
+It defaults to a 3-node split (majority {1,2} vs lone node {3}) but is
+parameterizable for any split — e.g. a 5-node 3-vs-2 split where *both* sides are
+multi-node sub-clusters:
+
+```sh
+SB_COMPOSE=docker-compose.static5.yml SB_PROJECT=aether-split5 \
+SB_MAJORITY="1 2 3" SB_MINORITY="4 5" test/e2e/split_brain.sh
 ```
 
 ## Status and limitations
