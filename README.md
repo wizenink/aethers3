@@ -264,7 +264,14 @@ multipart; ranged GET; delete; list). All run in CI:
 test/e2e/same_host.sh       # 3 nodes on one host (LocalEpmd); needs elixir + aws-cli
 test/e2e/docker_cluster.sh  # 3 containers (DNSPoll); needs docker (uses the amazon/aws-cli image)
 test/e2e/split_brain.sh     # partitions a 3-node cluster, proves recovery (see below)
+test/e2e/rebalance.sh       # grows 3->5 nodes, proves migration + orphan shedding
 ```
+
+`rebalance.sh` writes a batch to a 3-node cluster, adds 2 more nodes, and asserts
+anti-entropy **migrates** objects to the new HRW owners *and* **sheds** them from
+nodes that are no longer replicas — verified by the total copy count staying at
+`objects × replication_factor` (migration alone would balloon it) while the new
+nodes receive data.
 
 `split_brain.sh` partitions the cluster (an `iptables` sidecar in each minority
 node's network namespace) and asserts the two recovery behaviors: the **control

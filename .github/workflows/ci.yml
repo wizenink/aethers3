@@ -101,3 +101,14 @@ jobs:
       # amazon/aws-cli (S3 client) and nicolaka/netshoot (iptables) at runtime.
       - name: Run split-brain e2e
         run: bash test/e2e/split_brain.sh
+
+  e2e-rebalance:
+    name: E2E (rebalancing on topology change)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Grows a 3-node cluster to 5 and asserts anti-entropy migrates objects to
+      # new owners AND sheds orphans (total copies stays = objects × RF).
+      - name: Run rebalance e2e
+        run: bash test/e2e/rebalance.sh
