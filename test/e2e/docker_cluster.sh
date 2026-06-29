@@ -79,6 +79,17 @@ awsd "$IP1" s3 cp /data/small.txt s3://e2e/small.txt >/dev/null
 awsd "$IP3" s3 cp s3://e2e/small.txt /data/small.out >/dev/null
 cmp -s "$WORKDIR/small.txt" "$WORKDIR/small.out" || fail "small object differs across nodes"
 
+# --- concurrent upload (regression: Expect:100-continue keep-alive desync) ---
+# aws-cli's recursive transfer reuses connections and sends Expect:100-continue;
+# a stale-conn bug used to desync keep-alive connections and 400 ~half of these.
+log "concurrent recursive upload (20 objects), expect zero failures..."
+mkdir "$WORKDIR/many"
+for i in $(seq 0 19); do printf "obj%d" "$i" > "$WORKDIR/many/o$i"; done
+fails="$(awsd "$IP1" s3 cp /data/many s3://e2e/many/ --recursive 2>&1 | grep -c failed || true)"
+[ "$fails" -eq 0 ] || fail "$fails concurrent uploads failed (keep-alive desync regression)"
+listed="$(awsd "$IP3" s3 ls s3://e2e/many/ | grep -c ' o[0-9]' || true)"
+[ "$listed" -eq 20 ] || fail "expected 20 objects after concurrent upload, listed $listed"
+
 # --- multipart: 10MB via node 1, read from node 2 ---
 log "multipart upload (node 1), GET from node 2, verify..."
 head -c 10485760 /dev/urandom > "$WORKDIR/big.bin"

@@ -3,8 +3,12 @@ defmodule AetherS3.Storage.Streamer do
 
   @chunk 1_000_000
 
-  @spec ingest(String.t(), String.t()) ::
-          {:ok, %{size: non_neg_integer(), etag: String.t()}} | {:error, term()}
+  # Returns the post-read conn so the caller responds on a conn that knows the body
+  # was consumed. Otherwise Bandit, on a keep-alive connection, tries to drain a body
+  # it thinks is unread and eats the next pipelined request (desync -> HTTP 400),
+  # which `Expect: 100-continue` clients trigger constantly under concurrency.
+  @spec ingest(Plug.Conn.t(), String.t()) ::
+          {:ok, %{size: non_neg_integer(), etag: String.t()}, Plug.Conn.t()} | {:error, term()}
   def ingest(conn, path) do
     File.mkdir_p!(Path.dirname(path))
     {:ok, fd} = :file.open(path, [:write, :raw, :binary])
@@ -22,7 +26,7 @@ defmodule AetherS3.Storage.Streamer do
         :ok = :file.write(fd, chunk)
         do_ingest(conn, fd, :crypto.hash_update(md5_ctx, chunk), size + byte_size(chunk))
 
-      {:ok, chunk, _conn} ->
+      {:ok, chunk, conn} ->
         :ok = :file.write(fd, chunk)
 
         etag =
@@ -31,7 +35,7 @@ defmodule AetherS3.Storage.Streamer do
           |> :crypto.hash_final()
           |> Base.encode16(case: :lower)
 
-        {:ok, %{size: size + byte_size(chunk), etag: etag}}
+        {:ok, %{size: size + byte_size(chunk), etag: etag}, conn}
 
       {:error, reason} ->
         {:error, reason}

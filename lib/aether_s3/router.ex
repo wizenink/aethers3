@@ -166,12 +166,12 @@ defmodule AetherS3.Router do
         part_key = Multipart.part_key(upload_id, part_number)
 
         case Coordinator.put(conn, Multipart.bucket(), part_key, "application/octet-stream") do
-          {:ok, etag} ->
+          {:ok, etag, conn} ->
             conn
             |> put_resp_header("etag", ~s("#{etag}"))
             |> send_resp(200, "")
 
-          {:error, :insufficient_replicas} ->
+          {:error, :insufficient_replicas, conn} ->
             send_xml(
               conn,
               503,
@@ -196,12 +196,12 @@ defmodule AetherS3.Router do
 
         if ControlPlane.bucket_exists?(bucket) do
           case Coordinator.put(conn, bucket, key, content_type) do
-            {:ok, etag} ->
+            {:ok, etag, conn} ->
               conn
               |> put_resp_header("etag", ~s("#{etag}"))
               |> send_resp(200, "")
 
-            {:error, :insufficient_replicas} ->
+            {:error, :insufficient_replicas, conn} ->
               send_xml(
                 conn,
                 503,

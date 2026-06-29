@@ -15,7 +15,7 @@ defmodule AetherS3.Replication.Coordinator do
     staged = "#{final}.#{rand_token()}.staging"
 
     case Streamer.ingest(conn, staged) do
-      {:ok, %{size: size, etag: etag}} ->
+      {:ok, %{size: size, etag: etag}, conn} ->
         # Atomic local publish: concurrent PUTs of the same key each ingest their
         # own temp, then rename — last writer wins, never an interleaved/corrupt
         # blob, and a crash leaves an orphan temp instead of a half-written final.
@@ -57,11 +57,11 @@ defmodule AetherS3.Replication.Coordinator do
               unless Node.self() in replicas, do: File.rm(final)
             end)
 
-            {:ok, etag}
+            {:ok, etag, conn}
 
-          {:error, :insufficient_replicas} = err ->
+          {:error, :insufficient_replicas} ->
             unless Node.self() in replicas, do: File.rm(final)
-            err
+            {:error, :insufficient_replicas, conn}
         end
 
       {:error, reason} ->
