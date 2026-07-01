@@ -3,11 +3,12 @@ defmodule AetherS3.Replication.AntiEntropy do
   Push-based replica convergence AND rebalancing on membership change. Each cycle
   walks every locally-held object and:
 
-    * `repair/3` — pushes it (LWW) to any current HRW replica that is missing or
-      stale. This also MIGRATES objects to new owners after the ring changes.
+    * `repair/3` — pushes it to any current HRW replica whose version our copy
+      *supersedes* (version vectors; LWW tiebreak for true conflicts). This also
+      MIGRATES objects to new owners after the ring changes.
     * `maybe_shed/3` — if this node is no longer an HRW replica for the object,
-      deletes the LOCAL copy — but only once every current replica holds it at a
-      version >= ours, so the last/only copy is never dropped.
+      deletes the LOCAL copy — but only once every current replica holds a version
+      we don't supersede (causally >= ours), so the last/only copy is never dropped.
 
   NOTE: `repair` uses `push_blob`, which assumes a blob exists, so meta-only
   objects (completed-multipart manifests and `__mpu__` markers) are not yet
@@ -17,6 +18,7 @@ defmodule AetherS3.Replication.AntiEntropy do
   """
   alias AetherS3.Cluster.RingServer
   alias AetherS3.Replication.Coordinator
+  alias AetherS3.Replication.Conflict
   alias AetherS3.ObjectMeta.Store, as: ObjectMeta
   alias AetherS3.Replication.Receiver
 
@@ -47,7 +49,9 @@ defmodule AetherS3.Replication.AntiEntropy do
     |> RingServer.replicas()
     |> Enum.reject(&(&1 == Node.self()))
     |> Enum.each(fn replica ->
-      if stale?(replica, bucket, key, local_meta) do
+      # Push only if our version supersedes what the replica holds (missing, older,
+      # or a concurrent loser). If the replica is newer, ITS anti-entropy pushes to us.
+      if Conflict.supersedes?(local_meta, fetch(replica, bucket, key)) do
         Logger.info("anti-entropy: repairing #{bucket}/#{key} → #{replica}")
         Coordinator.push_blob(replica, bucket, key, local_meta)
       end
@@ -70,27 +74,27 @@ defmodule AetherS3.Replication.AntiEntropy do
     end
   end
 
+  # Safe to shed our copy only if every current replica holds a version that we do
+  # NOT supersede — i.e. each is causally >= ours (or won a concurrent tiebreak).
+  # A missing replica means it isn't safely there yet, so we keep our copy.
   defp safely_replicated?(replicas, bucket, key, meta) do
     Enum.all?(replicas, fn node ->
-      case get_meta_from(node, bucket, key) do
-        {:ok, remote} -> DateTime.compare(remote.last_modified, meta.last_modified) != :lt
-        _ -> false
+      case fetch(node, bucket, key) do
+        nil -> false
+        remote -> not Conflict.supersedes?(meta, remote)
       end
     end)
   end
 
-  defp stale?(replica, bucket, key, local_meta) do
-    case get_meta_from(replica, bucket, key) do
-      {:ok, remote} -> DateTime.compare(remote.last_modified, local_meta.last_modified) == :lt
-      _ -> true
+  # A replica's meta, or nil if it doesn't have it / is unreachable.
+  defp fetch(node, bucket, key) do
+    case :erpc.call(node, ObjectMeta, :get, [bucket, key], 2_000) do
+      {:ok, meta} -> meta
+      _ -> nil
     end
-  end
-
-  defp get_meta_from(node, bucket, key) do
-    :erpc.call(node, ObjectMeta, :get, [bucket, key], 2_000)
   rescue
-    _ -> :not_found
+    _ -> nil
   catch
-    _, _ -> :not_found
+    _, _ -> nil
   end
 end

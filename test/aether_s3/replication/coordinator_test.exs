@@ -3,31 +3,47 @@ defmodule AetherS3.Replication.CoordinatorTest do
 
   alias AetherS3.Replication.Coordinator
 
-  defp meta(t), do: %{last_modified: t, size: 1, etag: "e", content_type: "text/plain"}
+  @t ~U[2026-01-01 00:00:00Z]
 
-  @old ~U[2026-01-01 00:00:00Z]
-  @new ~U[2026-01-02 00:00:00Z]
+  # meta carrying a version vector (and an etag derived from it so distinct
+  # versions look like distinct content).
+  defp meta(vv), do: %{last_modified: @t, size: 1, etag: inspect(vv), content_type: "x", vv: vv}
 
   test "plan/2 returns :not_found when no replica has the object" do
     results = [{:a, :not_found}, {:b, :not_found}]
     assert Coordinator.plan([:a, :b], results) == :not_found
   end
 
-  test "plan/2 with all replicas in sync has no repair targets" do
-    results = [{:a, {:ok, meta(@old)}}, {:b, {:ok, meta(@old)}}, {:c, {:ok, meta(@old)}}]
+  test "plan/2 with all replicas at the same version has no repair targets" do
+    v = meta(%{a: 1})
+    results = [{:a, {:ok, v}}, {:b, {:ok, v}}, {:c, {:ok, v}}]
     {winner, _meta, targets} = Coordinator.plan([:a, :b, :c], results)
     assert winner in [:a, :b, :c]
     assert targets == []
   end
 
-  test "plan/2 picks the LWW winner and flags stale + missing replicas" do
-    results = [{:a, {:ok, meta(@old)}}, {:b, {:ok, meta(@new)}}, {:c, :not_found}]
+  test "plan/2 picks the causally-latest version and flags older + missing replicas" do
+    old = meta(%{a: 1})
+    # :b's version descends :a's (a wrote v1, b overwrote -> {a:1,b:1})
+    new = meta(%{a: 1, b: 1})
+    results = [{:a, {:ok, old}}, {:b, {:ok, new}}, {:c, :not_found}]
     {winner, winner_meta, targets} = Coordinator.plan([:a, :b, :c], results)
 
     assert winner == :b
-    assert winner_meta.last_modified == @new
-    # :a is stale, :c is missing; :b (the winner) is never a target
+    assert winner_meta.vv == %{a: 1, b: 1}
+    # :a holds the older version, :c is missing; :b (the winner) is never a target
     assert Enum.sort(targets) == [:a, :c]
+  end
+
+  test "plan/2 resolves a true conflict (concurrent VVs) deterministically" do
+    # {a:1} and {b:1} are concurrent -> winner decided by the etag tiebreak.
+    ca = meta(%{a: 1})
+    cb = meta(%{b: 1})
+    results = [{:a, {:ok, ca}}, {:b, {:ok, cb}}]
+    {winner, _meta, targets} = Coordinator.plan([:a, :b], results)
+    assert winner in [:a, :b]
+    # the loser is repaired to the winner's version
+    assert targets == [if(winner == :a, do: :b, else: :a)]
   end
 
   describe "resolve_w/2 (write quorum)" do

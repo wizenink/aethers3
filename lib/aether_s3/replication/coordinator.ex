@@ -5,6 +5,8 @@ defmodule AetherS3.Replication.Coordinator do
   alias AetherS3.Storage.{BlobStore, Streamer}
   alias AetherS3.ObjectMeta.Store, as: ObjectMeta
   alias AetherS3.Replication.Receiver
+  alias AetherS3.Replication.VersionVector
+  alias AetherS3.Replication.Conflict
   alias AetherS3.Storage.Multipart
 
   @chunk 1_048_576
@@ -25,7 +27,8 @@ defmodule AetherS3.Replication.Coordinator do
           size: size,
           etag: etag,
           content_type: content_type,
-          last_modified: DateTime.utc_now()
+          last_modified: DateTime.utc_now(),
+          vv: bump_vv(bucket, key)
         }
 
         # Replicate to W replicas synchronously before acking; the rest go in the
@@ -164,7 +167,9 @@ defmodule AetherS3.Replication.Coordinator do
   Pure read-repair planning: given the replica order and each replica's meta
   lookup result (`[{node, {:ok, meta} | :not_found}]`), return `:not_found` if no
   replica has the object, else `{winner_node, winner_meta, repair_targets}` where
-  the winner is the LWW (freshest) copy and targets are the stale/missing peers.
+  the winner is the causally-latest copy (version vectors; LWW tiebreak for true
+  conflicts) and targets are the replicas whose version the winner supersedes
+  (older, missing, or a concurrent loser).
   """
   def plan(replicas, results) do
     present = for {n, {:ok, m}} <- results, do: {n, m}
@@ -175,17 +180,24 @@ defmodule AetherS3.Replication.Coordinator do
 
       _ ->
         {winner_node, winner_meta} =
-          Enum.max_by(present, fn {_n, m} -> m.last_modified end, DateTime)
+          Enum.reduce(present, fn {_n, m} = cur, {_wn, wm} = win ->
+            if Conflict.winner(m, wm) == m, do: cur, else: win
+          end)
 
-        targets = for n <- replicas, n != winner_node, stale?(n, results, winner_meta), do: n
+        targets =
+          for n <- replicas,
+              n != winner_node,
+              Conflict.supersedes?(winner_meta, meta_at(n, results)),
+              do: n
+
         {winner_node, winner_meta, targets}
     end
   end
 
-  defp stale?(node, results, winner_meta) do
+  defp meta_at(node, results) do
     case List.keyfind(results, node, 0) do
-      {_, {:ok, m}} -> DateTime.compare(m.last_modified, winner_meta.last_modified) == :lt
-      _ -> true
+      {_, {:ok, m}} -> m
+      _ -> nil
     end
   end
 
@@ -242,6 +254,7 @@ defmodule AetherS3.Replication.Coordinator do
         etag: etag,
         content_type: content_type,
         last_modified: DateTime.utc_now(),
+        vv: bump_vv(bucket, key),
         parts: parts
       }
 
@@ -307,8 +320,29 @@ defmodule AetherS3.Replication.Coordinator do
   end
 
   def put_upload_meta(upload_id, content_type) do
-    meta = %{content_type: content_type, size: 0, last_modified: DateTime.utc_now()}
+    # Write-once marker, so no prior to descend — a fresh single-event vector.
+    meta = %{
+      content_type: content_type,
+      size: 0,
+      last_modified: DateTime.utc_now(),
+      vv: VersionVector.increment(VersionVector.new(), Node.self())
+    }
+
     put_manifest(Multipart.bucket(), Multipart.init_key(upload_id), meta)
+  end
+
+  # The new version's vector: increment this (coordinator) node's counter over the
+  # prior version's vector, so an overwrite causally descends what it replaced.
+  # `locate` reads the freshest known prior (one extra read per write — the cost
+  # of version vectors). A missing/old vv-less prior starts from an empty vector.
+  defp bump_vv(bucket, key) do
+    prior_vv =
+      case locate(bucket, key) do
+        {:ok, %{vv: vv}, _node} -> vv
+        _ -> VersionVector.new()
+      end
+
+    VersionVector.increment(prior_vv, Node.self())
   end
 
   def get_upload_meta(upload_id) do
