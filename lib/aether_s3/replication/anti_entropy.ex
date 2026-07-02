@@ -9,12 +9,6 @@ defmodule AetherS3.Replication.AntiEntropy do
     * `maybe_shed/3` — if this node is no longer an HRW replica for the object,
       deletes the LOCAL copy — but only once every current replica holds a version
       we don't supersede (causally >= ours), so the last/only copy is never dropped.
-
-  NOTE: `repair` uses `push_blob`, which assumes a blob exists, so meta-only
-  objects (completed-multipart manifests and `__mpu__` markers) are not yet
-  migrated to new owners on a ring change. Shedding stays safe for them
-  (`safely_replicated?` fails → they are never dropped); full rebalancing of
-  meta-only objects is a TODO.
   """
   alias AetherS3.Cluster.RingServer
   alias AetherS3.Replication.Coordinator
@@ -53,7 +47,7 @@ defmodule AetherS3.Replication.AntiEntropy do
       # or a concurrent loser). If the replica is newer, ITS anti-entropy pushes to us.
       if Conflict.supersedes?(local_meta, fetch(replica, bucket, key)) do
         Logger.info("anti-entropy: repairing #{bucket}/#{key} → #{replica}")
-        Coordinator.push_blob(replica, bucket, key, local_meta)
+        Coordinator.push_object(replica, bucket, key, local_meta)
       end
     end)
   end

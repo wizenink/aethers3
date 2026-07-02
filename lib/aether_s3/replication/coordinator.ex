@@ -100,6 +100,14 @@ defmodule AetherS3.Replication.Coordinator do
 
   defp rand_token, do: Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
 
+  def push_object(target, bucket, key, meta) do
+    if File.exists?(BlobStore.path(bucket, key)) do
+      push_blob(target, bucket, key, meta)
+    else
+      :erpc.call(target, Receiver, :commit, [bucket, key, meta])
+    end
+  end
+
   def push_blob(target, bucket, key, meta) do
     staged = BlobStore.path(bucket, key)
     # unique per-push token so the target stages to its own temp file; concurrent
