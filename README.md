@@ -123,6 +123,7 @@ All runtime configuration is via environment variables.
 | `AETHER_PORT` | `9000` | S3 API listen port. |
 | `AETHER_DATA_DIR` | `tmp/aether_data` | Where blobs, metadata, and the Khepri log live. One per node. |
 | `AETHER_REQUIRE_AUTH` | `true` | SigV4 auth on/off. |
+| `AETHER_LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warning`, `error`, …). Can also be changed live — see below. |
 | `AETHER_ACCESS_KEY` | `AKIAEXAMPLE` | S3 access key (development default). |
 | `AETHER_SECRET_KEY` | `devsecret` | S3 secret key (development default). |
 | `AETHER_REPLICATION_FACTOR` | `3` | Number of replicas per object. |
@@ -134,9 +135,17 @@ All runtime configuration is via environment variables.
 | `AETHER_NODE_BASENAME` | `aether` | Node basename used to build peer node names under DNSPoll. |
 | `AETHER_CP_EVICT_GRACE` | _(unset)_ | Seconds a control-plane member must be unreachable before the Raft leader evicts it. Unset = disabled (opt-in). |
 | `AETHER_MPU_REAP_AGE` | _(unset)_ | Seconds after which a multipart upload with no Complete/Abort is swept (parts + marker deleted). Unset = disabled (opt-in). |
+| `AETHER_STAGING_SWEEP_AGE` | `3600` | Seconds a crashed-write staging temp (`.staging`/`.tmp`) must age before it's reclaimed. Always on; raise to protect very slow in-flight writes. |
 | `AETHER_CONFIG` | `/etc/aether_s3/config.toml` | Path to the production TOML config file (see below). |
 
 Discovery precedence: `AETHER_PEERS` → `AETHER_DNS_QUERY` → `AETHER_GOSSIP` → LocalEpmd (same-host dev default).
+
+To change the log level on a **running** node without a restart (e.g. to capture
+debug output during an incident), use the release remote shell:
+
+```
+bin/aether_s3 rpc 'AetherS3.Config.set_log_level("debug")'
+```
 
 Node name and cookie are BEAM-level (set before the app boots, so they can't go
 in the TOML file). Use `AETHER_NODE` / `AETHER_COOKIE` (friendly aliases), or the

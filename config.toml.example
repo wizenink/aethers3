@@ -18,6 +18,10 @@ write_quorum = "quorum"
 
 require_auth = true
 
+# Log level: debug | info | notice | warning | error (and friends). Can also be
+# changed live on a running node: bin/aether_s3 rpc 'AetherS3.Config.set_log_level("debug")'
+# log_level = "info"
+
 # Control-plane dead-member eviction (opt-in). Seconds a member must be
 # unreachable before the Ra leader evicts it. Omit to disable (safe default).
 # cp_evict_grace = 60
@@ -26,6 +30,11 @@ require_auth = true
 # no Complete/Abort is swept (its parts + init marker deleted). The age is
 # measured from initiation, so in-flight uploads are safe. Omit to disable.
 # mpu_reap_age = 86400
+
+# Reclaim crashed-write staging temps (.staging/.tmp). Seconds a temp must age
+# before it's swept (always on; defaults to 3600). Raise to protect very slow
+# in-flight writes.
+# staging_sweep_age = 3600
 
 # S3 credentials: access_key = secret_key (one or more pairs).
 [credentials]

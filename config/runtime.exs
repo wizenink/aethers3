@@ -25,14 +25,9 @@ if config_env() != :test do
   # Write quorum: replicas that must ack before a PUT returns. Higher W trades
   # availability for durability (W=2 survives one node loss). Integer, or
   # "quorum" (majority) / "all". Default 1 (fast, AP, heals async).
-  write_quorum =
-    case System.get_env("AETHER_WRITE_QUORUM", "1") do
-      "quorum" -> :quorum
-      "all" -> :all
-      n -> String.to_integer(n)
-    end
-
-  config :aether_s3, :write_quorum, write_quorum
+  config :aether_s3,
+         :write_quorum,
+         AetherS3.Config.write_quorum(System.get_env("AETHER_WRITE_QUORUM", "1"))
 
   # Control-plane dead-member eviction is OPT-IN: set AETHER_CP_EVICT_GRACE to a
   # number of SECONDS a member must be unreachable before the Ra leader evicts it
@@ -57,6 +52,18 @@ if config_env() != :test do
       :ok
   end
 
+  # Orphaned staging-temp sweeping is always on (reclaiming a crashed write's temp
+  # is never destructive). AETHER_STAGING_SWEEP_AGE overrides the SECONDS a temp
+  # must age before it's swept (default 1h) — set it high to protect very slow
+  # in-flight writes, or low to reclaim disk sooner.
+  case System.get_env("AETHER_STAGING_SWEEP_AGE") do
+    g when is_binary(g) and g != "" ->
+      config :aether_s3, :staging_sweep_age_ms, String.to_integer(g) * 1000
+
+    _ ->
+      :ok
+  end
+
   # Cluster discovery strategy, chosen per deployment:
   #   * AETHER_PEERS set      -> Epmd: connect to a static, comma-separated list of
   #     node names (stable-name deploys). Names must be resolvable; discovery IS
@@ -73,30 +80,29 @@ if config_env() != :test do
         hosts =
           peers |> String.split(",", trim: true) |> Enum.map(&String.to_atom(String.trim(&1)))
 
-        [aether: [strategy: Cluster.Strategy.Epmd, config: [hosts: hosts]]]
+        AetherS3.Config.topology(:epmd, hosts)
 
       query = System.get_env("AETHER_DNS_QUERY") ->
-        [
-          aether: [
-            strategy: Cluster.Strategy.DNSPoll,
-            config: [
-              polling_interval: 5_000,
-              query: query,
-              node_basename: System.get_env("AETHER_NODE_BASENAME", "aether")
-            ]
-          ]
-        ]
+        AetherS3.Config.topology(:dns, %{
+          query: query,
+          basename: System.get_env("AETHER_NODE_BASENAME", "aether")
+        })
 
       System.get_env("AETHER_GOSSIP") in ["1", "true"] ->
-        secret = System.get_env("AETHER_GOSSIP_SECRET")
-        gossip_config = if secret, do: [secret: secret], else: []
-        [aether: [strategy: Cluster.Strategy.Gossip, config: gossip_config]]
+        AetherS3.Config.topology(:gossip, System.get_env("AETHER_GOSSIP_SECRET"))
 
       true ->
-        [aether: [strategy: Cluster.Strategy.LocalEpmd]]
+        AetherS3.Config.topology(:local, nil)
     end
 
   config :libcluster, topologies: topologies
+end
+
+# Log level is a runtime knob (change it per deployment without a rebuild, or
+# live on a running node via `AetherS3.Config.set_log_level/1` over the remote
+# shell). config/config.exs sets the build-time default; this overrides it.
+if level = System.get_env("AETHER_LOG_LEVEL") do
+  config :logger, level: AetherS3.Config.log_level(level)
 end
 
 # Production config file (TOML). Env vars above are the dev/default path; in
@@ -109,59 +115,14 @@ toml_path = System.get_env("AETHER_CONFIG", "/etc/aether_s3/config.toml")
 if File.exists?(toml_path) do
   toml = Toml.decode_file!(toml_path)
 
-  if v = toml["port"], do: config(:aether_s3, :port, v)
-  if v = toml["data_dir"], do: config(:aether_s3, :data_dir, v)
-  if v = toml["replication_factor"], do: config(:aether_s3, :replication_factor, v)
-  if v = toml["credentials"], do: config(:aether_s3, :credentials, v)
-
-  # Dead-member eviction grace, in SECONDS (opt-in; omit to disable).
-  if v = toml["cp_evict_grace"], do: config(:aether_s3, :cp_evict_grace_ms, v * 1000)
-
-  # Incomplete-multipart-upload reap age, in SECONDS (opt-in; omit to disable).
-  if v = toml["mpu_reap_age"], do: config(:aether_s3, :mpu_reap_age_ms, v * 1000)
-
-  # require_auth may legitimately be false, so test key presence, not truthiness.
-  if Map.has_key?(toml, "require_auth"),
-    do: config(:aether_s3, :require_auth, toml["require_auth"])
-
-  if v = toml["write_quorum"] do
-    quorum =
-      case v do
-        "quorum" -> :quorum
-        "all" -> :all
-        n when is_integer(n) -> n
-      end
-
-    config :aether_s3, :write_quorum, quorum
+  # The unit/type conversions live in AetherS3.Config (tested); here we just apply
+  # whatever keys the file set. Seconds→ms, "quorum"→:quorum, etc. happen there.
+  for {key, value} <- AetherS3.Config.app_config_from_toml(toml) do
+    config :aether_s3, key, value
   end
 
-  if cluster = toml["cluster"] do
-    topologies =
-      case cluster["strategy"] do
-        "dns" ->
-          [
-            aether: [
-              strategy: Cluster.Strategy.DNSPoll,
-              config: [
-                polling_interval: 5_000,
-                query: cluster["dns_query"],
-                node_basename: cluster["node_basename"] || "aether"
-              ]
-            ]
-          ]
+  if v = toml["log_level"], do: config(:logger, level: AetherS3.Config.log_level(v))
 
-        "epmd" ->
-          hosts = Enum.map(cluster["peers"] || [], &String.to_atom/1)
-          [aether: [strategy: Cluster.Strategy.Epmd, config: [hosts: hosts]]]
-
-        "gossip" ->
-          gossip_config = if s = cluster["secret"], do: [secret: s], else: []
-          [aether: [strategy: Cluster.Strategy.Gossip, config: gossip_config]]
-
-        _ ->
-          [aether: [strategy: Cluster.Strategy.LocalEpmd]]
-      end
-
-    config :libcluster, topologies: topologies
-  end
+  if topologies = AetherS3.Config.topology_from_toml(toml),
+    do: config(:libcluster, topologies: topologies)
 end
