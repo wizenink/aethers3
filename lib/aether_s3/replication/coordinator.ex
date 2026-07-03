@@ -313,8 +313,7 @@ defmodule AetherS3.Replication.Coordinator do
 
   TODO: this scatter-gathers the whole `__mpu__` bucket and filters by prefix.
   Fine for now, but a prefix-range scan in ObjectMeta.Store would avoid walking
-  unrelated in-flight uploads. Also leaves no trace of partially-deleted aborts —
-  the future incomplete-MPU reaper should sweep orphans.
+  unrelated in-flight uploads.
   """
   def abort_multipart(upload_id) do
     prefix = "#{upload_id}/"
@@ -325,6 +324,35 @@ defmodule AetherS3.Replication.Coordinator do
     |> Enum.each(fn {key, _meta} ->
       if String.starts_with?(key, prefix), do: delete(bucket, key)
     end)
+  end
+
+  @doc """
+  Sweep abandoned multipart uploads: any upload whose `_init` marker still exists
+  and is older than `grace_ms` never completed or aborted, so delete its parts +
+  marker (cluster-wide, via `abort_multipart/1`).
+
+  The marker is the liveness signal — Complete deletes it, Abort deletes
+  everything — so a lingering marker means "in progress or abandoned", and the age
+  grace (measured from initiation) tells the two apart without touching an upload
+  that's still running. Returns the number of uploads reaped.
+  """
+  def reap_incomplete_uploads(grace_ms) do
+    now = DateTime.utc_now()
+    # marker keys are `<upload_id>/_init` (see Multipart.init_key/1)
+    suffix = "/_init"
+
+    Multipart.bucket()
+    |> list()
+    |> Enum.filter(fn {key, meta} ->
+      String.ends_with?(key, suffix) and
+        DateTime.diff(now, meta.last_modified, :millisecond) >= grace_ms
+    end)
+    |> Enum.map(fn {key, _meta} ->
+      upload_id = String.trim_trailing(key, suffix)
+      Logger.info("reaping abandoned multipart upload #{upload_id}")
+      abort_multipart(upload_id)
+    end)
+    |> length()
   end
 
   def put_upload_meta(upload_id, content_type) do

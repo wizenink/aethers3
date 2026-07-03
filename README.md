@@ -133,6 +133,7 @@ All runtime configuration is via environment variables.
 | `AETHER_GOSSIP_SECRET` | _(unset)_ | Optional shared secret encrypting gossip, so only nodes that share it join. |
 | `AETHER_NODE_BASENAME` | `aether` | Node basename used to build peer node names under DNSPoll. |
 | `AETHER_CP_EVICT_GRACE` | _(unset)_ | Seconds a control-plane member must be unreachable before the Raft leader evicts it. Unset = disabled (opt-in). |
+| `AETHER_MPU_REAP_AGE` | _(unset)_ | Seconds after which a multipart upload with no Complete/Abort is swept (parts + marker deleted). Unset = disabled (opt-in). |
 | `AETHER_CONFIG` | `/etc/aether_s3/config.toml` | Path to the production TOML config file (see below). |
 
 Discovery precedence: `AETHER_PEERS` → `AETHER_DNS_QUERY` → `AETHER_GOSSIP` → LocalEpmd (same-host dev default).
@@ -291,15 +292,27 @@ SB_MAJORITY="1 2 3" SB_MINORITY="4 5" test/e2e/split_brain.sh
 
 ## Status and limitations
 
-Working: replicated writes, range-aware reads with cross-node proxying, fan-out
-deletes, scatter-gather listing, the Khepri control plane, libcluster
-auto-discovery and Raft auto-join, and an anti-entropy self-healing loop.
+Working: replicated writes with a **configurable write quorum** (W), range-aware
+reads with cross-node proxying and **read-repair**, **version-vector** conflict
+resolution (LWW tiebreak for true conflicts), fan-out deletes, scatter-gather
+listing, the Khepri control plane with libcluster auto-discovery + Raft auto-join,
+**dead-member eviction and boot-time self-heal** of an evicted node, an
+anti-entropy loop that also **rebalances** (migrates *and* sheds) on topology
+change, reaping of abandoned multipart uploads, and an end-to-end test suite
+(same-host, Docker, split-brain, rebalance, and reaping) that runs in CI.
 
 Known gaps and future work:
 
-- Control-plane member lifecycle is not fully hardened: a wiped node rejoining,
-  evicting dead members, and split-brain merge all need work. Today a Khepri
-  `join` makes the joiner adopt the cluster's state and discard its own, so a
-  control-plane write during the brief formation window can be lost.
-- No metrics/telemetry export yet.
-- Orphaned blob sweeping is not implemented.
+- **Security/auth:** one hardcoded credential pair, no bucket policies/ACLs, no
+  TLS, and the `__mpu__` internal bucket is client-reachable. Not safe to expose.
+- **Formation-window write loss (control plane):** a Khepri `join` makes a fresh
+  joiner adopt the cluster's state, so a control-plane write in the ~1 s before
+  initial Raft membership stabilizes can be lost. (Steady-state partitions are
+  fine — a reconnecting member *resyncs*, it doesn't re-join.)
+- **Conflict resolution is single-value:** concurrent writes to the same key
+  converge to one version (version vectors detect the conflict, but S3 can't
+  expose siblings, so the losing write is discarded).
+- **Orphan cleanup:** abandoned multipart uploads are reaped (opt-in, via
+  `AETHER_MPU_REAP_AGE`), but parts orphaned when a manifest is overwritten, and
+  crash/partition staging blobs, aren't swept yet.
+- **No metrics/telemetry, health endpoints, bitrot scrub, or LIST pagination.**

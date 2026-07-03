@@ -45,6 +45,18 @@ if config_env() != :test do
       :ok
   end
 
+  # Incomplete-multipart-upload reaping is OPT-IN: set AETHER_MPU_REAP_AGE to a
+  # number of SECONDS after which an upload with no Complete/Abort is swept (its
+  # parts + init marker deleted). The age is measured from the upload's initiation,
+  # so an in-flight upload is never touched. Unset/empty = disabled.
+  case System.get_env("AETHER_MPU_REAP_AGE") do
+    g when is_binary(g) and g != "" ->
+      config :aether_s3, :mpu_reap_age_ms, String.to_integer(g) * 1000
+
+    _ ->
+      :ok
+  end
+
   # Cluster discovery strategy, chosen per deployment:
   #   * AETHER_PEERS set      -> Epmd: connect to a static, comma-separated list of
   #     node names (stable-name deploys). Names must be resolvable; discovery IS
@@ -104,6 +116,9 @@ if File.exists?(toml_path) do
 
   # Dead-member eviction grace, in SECONDS (opt-in; omit to disable).
   if v = toml["cp_evict_grace"], do: config(:aether_s3, :cp_evict_grace_ms, v * 1000)
+
+  # Incomplete-multipart-upload reap age, in SECONDS (opt-in; omit to disable).
+  if v = toml["mpu_reap_age"], do: config(:aether_s3, :mpu_reap_age_ms, v * 1000)
 
   # require_auth may legitimately be false, so test key presence, not truthiness.
   if Map.has_key?(toml, "require_auth"),

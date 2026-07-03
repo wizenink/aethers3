@@ -112,3 +112,14 @@ jobs:
       # new owners AND sheds orphans (total copies stays = objects × RF).
       - name: Run rebalance e2e
         run: bash test/e2e/rebalance.sh
+
+  e2e-reap:
+    name: E2E (incomplete-MPU reaping)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Starts a multipart upload without completing it and proves the reaper
+      # sweeps its parts + marker once past the age grace (and not before).
+      - name: Run reap e2e
+        run: bash test/e2e/reap.sh

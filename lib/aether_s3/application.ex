@@ -17,6 +17,7 @@ defmodule AetherS3.Application do
           {AetherS3.ControlPlane.Khepri, name: AetherS3.ControlPlane.Khepri},
           {AetherS3.ControlPlane.Cluster, name: AetherS3.ControlPlane.Cluster},
           {AetherS3.Replication.AntiEntropy, name: AetherS3.Replication.AntiEntropy},
+          {AetherS3.Replication.Reaper, name: AetherS3.Replication.Reaper},
           {Bandit, plug: AetherS3.Router, scheme: :http, port: port}
         ]
 

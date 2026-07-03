@@ -25,6 +25,7 @@ x-aether-env: &aether-env
   AETHER_PORT: "9000"
   AETHER_WRITE_QUORUM: "${AETHER_WRITE_QUORUM:-2}"
   AETHER_CP_EVICT_GRACE: "${AETHER_CP_EVICT_GRACE:-}"
+  AETHER_MPU_REAP_AGE: "${AETHER_MPU_REAP_AGE:-}"
 
 services:
   aether1:
