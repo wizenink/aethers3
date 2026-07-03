@@ -71,6 +71,7 @@ defmodule AetherS3.Config do
   def app_config_from_toml(toml) do
     []
     |> put(toml, "port", :port)
+    |> put(toml, "admin_port", :admin_port)
     |> put(toml, "data_dir", :data_dir)
     |> put(toml, "replication_factor", :replication_factor)
     |> put(toml, "credentials", :credentials)

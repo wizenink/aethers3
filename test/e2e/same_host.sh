@@ -11,6 +11,8 @@ cd "$(dirname "$0")/../.."
 COOKIE="aethere2e"
 NODES=(aethere1 aethere2 aethere3)
 PORTS=(9401 9402 9403)
+# Admin (health/metrics) ports — distinct per node since they share this host.
+ADMIN_PORTS=(9411 9412 9413)
 WORKDIR="$(mktemp -d)"
 PIDS=()
 
@@ -43,6 +45,7 @@ mix compile >/dev/null
 log "starting ${#NODES[@]} nodes..."
 for i in "${!NODES[@]}"; do
   AETHER_PORT="${PORTS[$i]}" \
+  AETHER_ADMIN_PORT="${ADMIN_PORTS[$i]}" \
   AETHER_DATA_DIR="$WORKDIR/${NODES[$i]}-data" \
   AETHER_REQUIRE_AUTH=false \
   AETHER_REPLICATION_FACTOR=3 \
@@ -58,6 +61,15 @@ for _ in $(seq 1 60); do
 done
 grep -q "cluster membership (3)" "$WORKDIR/${NODES[0]}.log" || fail "cluster did not form"
 log "cluster formed."
+
+# --- admin endpoints: each node's health + a metrics scrape (also guards the
+#     same-host admin-port-collision regression) ---
+log "probing admin endpoints (health/ready/metrics)..."
+for i in "${!NODES[@]}"; do
+  curl -fsS "http://127.0.0.1:${ADMIN_PORTS[$i]}/health" >/dev/null || fail "node $i /health not 200"
+done
+curl -fsS "http://127.0.0.1:${ADMIN_PORTS[0]}/metrics" | grep -q "aether_cluster_nodes" ||
+  fail "metrics missing aether_cluster_nodes"
 
 # Bucket creation goes through Khepri (CP) — retry until the Raft cluster is ready.
 log "creating bucket (node 0)..."

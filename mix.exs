@@ -70,7 +70,9 @@ defmodule AetherS3.MixProject do
       {:saxy, "~> 1.6"},
       {:khepri, "~> 0.18.0"},
       {:libcluster, "~> 3.5"},
-      {:toml, "~> 0.7"}
+      {:toml, "~> 0.7"},
+      {:telemetry_metrics_prometheus_core, "~> 1.1"},
+      {:telemetry_poller, "~> 1.1"}
     ]
 
     if System.get_env("BURRITO_BUILD") == "1" do

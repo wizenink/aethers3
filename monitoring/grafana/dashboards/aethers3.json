@@ -1,0 +1,206 @@
+{
+  "id": null,
+  "uid": "aethers3-overview",
+  "title": "AetherS3 — Cluster Overview",
+  "tags": ["aethers3"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Nodes up",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "count(up{job=\"aether\"} == 1)" } ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Cluster size (max node view)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "max(aether_cluster_nodes)" } ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Khepri leader present",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "mappings": [ { "type": "value", "options": { "0": { "text": "No", "color": "red" }, "1": { "text": "Yes", "color": "green" } } } ], "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "max(aether_cluster_khepri_leader)" } ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Stored replicas (sum of local objects)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(aether_cluster_objects)" } ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Objects per node",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "aether_cluster_objects", "legendFormat": "{{instance}}" } ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "S3 request rate by status (req/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum by (status) (rate(bandit_request_duration_milliseconds_count[1m]))", "legendFormat": "{{status}}" } ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "S3 request latency (ms)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "histogram_quantile(0.50, sum by (le) (rate(bandit_request_duration_milliseconds_bucket[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "histogram_quantile(0.95, sum by (le) (rate(bandit_request_duration_milliseconds_bucket[5m])))", "legendFormat": "p95" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "histogram_quantile(0.99, sum by (le) (rate(bandit_request_duration_milliseconds_bucket[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "VM memory per node",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "vm_memory_total", "legendFormat": "{{instance}}" } ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Object writes (ok)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(aether_object_put_count{kind=\"object\",result=\"ok\"})" } ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Write-quorum failures",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(aether_object_put_count{result=\"insufficient_replicas\"})" } ]
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Read-repairs",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(aether_read_repair_count)" } ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Objects shed (rebalance)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(aether_anti_entropy_shed_count)" } ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Object operations (ops/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_object_put_count{kind=\"object\"}[1m]))", "legendFormat": "put" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_object_read_count[1m]))", "legendFormat": "read" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_object_delete_count[1m]))", "legendFormat": "delete" }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "S3 throughput (bytes/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "Bps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(bandit_request_resp_body_bytes[1m]))", "legendFormat": "out (served)" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(bandit_request_req_body_bytes[1m]))", "legendFormat": "in (received)" }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Self-healing & rebalancing (ops/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_read_repair_count[1m]))", "legendFormat": "read-repair" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_anti_entropy_repair_count[1m]))", "legendFormat": "anti-entropy repair" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_anti_entropy_shed_count[1m]))", "legendFormat": "shed (rebalance)" }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Multipart & reaper (ops/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_multipart_initiated_count[1m]))", "legendFormat": "mpu initiated" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_multipart_completed_count[1m]))", "legendFormat": "mpu completed" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_multipart_aborted_count[1m]))", "legendFormat": "mpu aborted" },
+        { "refId": "D", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_reaper_mpu_count[1m]))", "legendFormat": "reaped (abandoned mpu)" },
+        { "refId": "E", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(rate(aether_reaper_staging_count[1m]))", "legendFormat": "swept (staging temps)" }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "VM memory breakdown (cluster)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "aetherprom" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(vm_memory_total)", "legendFormat": "total" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(vm_memory_processes)", "legendFormat": "processes" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(vm_memory_binary)", "legendFormat": "binary" },
+        { "refId": "D", "datasource": { "type": "prometheus", "uid": "aetherprom" }, "expr": "sum(vm_memory_ets)", "legendFormat": "ets" }
+      ]
+    }
+  ]
+}

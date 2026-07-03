@@ -29,5 +29,7 @@ WORKDIR /app
 COPY --from=build /src/_build/prod/rel/aether_s3 ./
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# 9000 S3 API, 9001 admin (health/readiness/metrics).
+EXPOSE 9000 9001
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["start"]

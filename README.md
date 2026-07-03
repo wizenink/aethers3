@@ -69,19 +69,20 @@ Start nodes with distinct names and the same cookie on the same host. libcluster
 uses LocalEpmd to discover same-host peers automatically:
 
 ```sh
-AETHER_PORT=9000 AETHER_DATA_DIR=tmp/n1 \
+AETHER_PORT=9000 AETHER_ADMIN_PORT=9001 AETHER_DATA_DIR=tmp/n1 \
   iex --sname aether1 --cookie aether -S mix run
 
-AETHER_PORT=9001 AETHER_DATA_DIR=tmp/n2 \
+AETHER_PORT=9002 AETHER_ADMIN_PORT=9003 AETHER_DATA_DIR=tmp/n2 \
   iex --sname aether2 --cookie aether -S mix run
 
-AETHER_PORT=9002 AETHER_DATA_DIR=tmp/n3 \
+AETHER_PORT=9004 AETHER_ADMIN_PORT=9005 AETHER_DATA_DIR=tmp/n3 \
   iex --sname aether3 --cookie aether -S mix run
 ```
 
-Give each node its own `AETHER_DATA_DIR`. With three nodes up and a replication
-factor of 3, every object is replicated to all of them; create a bucket on one
-node and it is visible on all.
+Give each node its own `AETHER_DATA_DIR`, and — since they share one host — a
+distinct `AETHER_PORT` (S3 API) and `AETHER_ADMIN_PORT` (health/metrics). With
+three nodes up and a replication factor of 3, every object is replicated to all
+of them; create a bucket on one node and it is visible on all.
 
 ### Docker (recommended for a real cluster)
 
@@ -121,6 +122,7 @@ All runtime configuration is via environment variables.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AETHER_PORT` | `9000` | S3 API listen port. |
+| `AETHER_ADMIN_PORT` | `9001` | Operational listen port for `/health`, `/ready`, `/metrics` (no auth). |
 | `AETHER_DATA_DIR` | `tmp/aether_data` | Where blobs, metadata, and the Khepri log live. One per node. |
 | `AETHER_REQUIRE_AUTH` | `true` | SigV4 auth on/off. |
 | `AETHER_LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warning`, `error`, …). Can also be changed live — see below. |
@@ -146,6 +148,55 @@ debug output during an incident), use the release remote shell:
 ```
 bin/aether_s3 rpc 'AetherS3.Config.set_log_level("debug")'
 ```
+
+## Observability
+
+Each node serves operational endpoints on `AETHER_ADMIN_PORT` (default 9001),
+separate from the S3 API so they need no SigV4 signature and can be firewalled
+off from public traffic:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Liveness — 200 as long as the process can respond. |
+| `GET /ready` | Readiness — 200 once this node knows a Khepri/Raft leader (can serve the control plane), else 503. Use it for load-balancer / k8s probes. |
+| `GET /metrics` | Prometheus exposition. |
+| `GET /cluster` | Best-effort JSON snapshot of every node's view (leader, per-node membership + object counts). Fans out via `erpc`; marks unreachable peers, so a partition is visible at a glance. |
+
+Metrics exported today: S3 request latency + counts (`bandit_request_duration_milliseconds`,
+tagged by method/status), BEAM VM stats (`vm_memory_total`, run-queue, process
+count), and per-node cluster gauges (`aether_cluster_nodes`,
+`aether_cluster_khepri_leader`, `aether_cluster_objects`). Point Prometheus at
+`<node>:9001/metrics`; a Grafana dashboard can be built against those names.
+
+Metrics are **per node** by design — the cluster-wide view comes from scraping
+every node and aggregating in PromQL (e.g. `sum(aether_cluster_objects)`, or
+`max(aether_cluster_nodes) - min(...)` to spot a partition). For a quick look
+without Prometheus, `GET /cluster` fans out and returns every node's view in one
+JSON document.
+
+### Telemetry showcase (Prometheus + Grafana)
+
+A self-contained stack — a 3-node cluster plus Prometheus (scraping every node's
+`/metrics`) plus Grafana with a pre-provisioned datasource and dashboard:
+
+```sh
+docker compose -f docker-compose.observability.yml up --build
+```
+
+Open Grafana at http://localhost:3000 (anonymous admin, no login) — the
+"AetherS3 — Cluster Overview" dashboard is already loaded (nodes up, cluster
+size, leader present, objects per node, S3 request rate/latency, VM memory).
+Prometheus is at http://localhost:9090. Node 1's S3 API is published on
+`localhost:9000`; drive some traffic and watch the panels move:
+
+```sh
+curl -X PUT http://localhost:9000/demo
+for i in $(seq 1 50); do curl -sX PUT --data "v$i" http://localhost:9000/demo/o$i >/dev/null; done
+```
+
+The monitoring config lives in `monitoring/` (Prometheus scrape config + Grafana
+provisioning + the dashboard JSON), so the dashboard is version-controlled and
+editable.
 
 Node name and cookie are BEAM-level (set before the app boots, so they can't go
 in the TOML file). Use `AETHER_NODE` / `AETHER_COOKIE` (friendly aliases), or the
@@ -324,4 +375,5 @@ Known gaps and future work:
 - **Orphan cleanup:** abandoned multipart uploads are reaped (opt-in, via
   `AETHER_MPU_REAP_AGE`), but parts orphaned when a manifest is overwritten, and
   crash/partition staging blobs, aren't swept yet.
-- **No metrics/telemetry, health endpoints, bitrot scrub, or LIST pagination.**
+- **No bitrot scrub or LIST pagination.** (Prometheus metrics + health/readiness
+  endpoints now exist — see Observability above; distributed tracing does not.)

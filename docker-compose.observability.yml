@@ -1,0 +1,100 @@
+name: aether-observability
+
+# Self-contained telemetry showcase: a 3-node AetherS3 cluster + Prometheus
+# (scraping each node's /metrics on the admin port) + Grafana with a
+# pre-provisioned datasource and dashboard.
+#
+#   docker compose -f docker-compose.observability.yml up --build
+#
+# Then open Grafana at http://localhost:3000 (anonymous admin, no login) — the
+# "AetherS3 — Cluster Overview" dashboard is already loaded. Prometheus is at
+# http://localhost:9090. Drive some S3 traffic against any node's :9000 (see the
+# READMEs) and watch the panels move.
+
+x-aether-env: &aether-env
+  RELEASE_COOKIE: dev-cluster-cookie
+  RELEASE_DISTRIBUTION: name
+  AETHER_PEERS: "aether@aether1.aethr,aether@aether2.aethr,aether@aether3.aethr"
+  AETHER_REQUIRE_AUTH: "false"
+  AETHER_DATA_DIR: /data
+  AETHER_PORT: "9000"
+  AETHER_ADMIN_PORT: "9001"
+  AETHER_WRITE_QUORUM: "${AETHER_WRITE_QUORUM:-1}"
+
+services:
+  aether1:
+    build: .
+    restart: unless-stopped
+    hostname: aether1.aethr
+    environment:
+      <<: *aether-env
+      RELEASE_NODE: aether@aether1.aethr
+    networks:
+      aether:
+        aliases: [aether1.aethr]
+    ports:
+      - "9000:9000"
+    volumes:
+      - aether1_data:/data
+
+  aether2:
+    build: .
+    restart: unless-stopped
+    hostname: aether2.aethr
+    environment:
+      <<: *aether-env
+      RELEASE_NODE: aether@aether2.aethr
+    networks:
+      aether:
+        aliases: [aether2.aethr]
+    volumes:
+      - aether2_data:/data
+
+  aether3:
+    build: .
+    restart: unless-stopped
+    hostname: aether3.aethr
+    environment:
+      <<: *aether-env
+      RELEASE_NODE: aether@aether3.aethr
+    networks:
+      aether:
+        aliases: [aether3.aethr]
+    volumes:
+      - aether3_data:/data
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      aether: {}
+    depends_on: [aether1, aether2, aether3]
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    networks:
+      aether: {}
+    depends_on: [prometheus]
+
+volumes:
+  aether1_data:
+  aether2_data:
+  aether3_data:
+
+networks:
+  aether: {}

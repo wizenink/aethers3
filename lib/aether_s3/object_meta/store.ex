@@ -32,4 +32,7 @@ defmodule AetherS3.ObjectMeta.Store do
     |> CubDB.select(min_key: {<<>>, <<>>}, max_key: {<<255>>, <<255>>})
     |> Enum.map(fn {{bucket, key}, meta} -> {bucket, key, meta} end)
   end
+
+  @doc "Number of object-metadata entries held locally (cheap; for metrics)."
+  def count, do: CubDB.size(@db)
 end

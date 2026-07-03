@@ -9,6 +9,8 @@
 #   - dist cookie -> RELEASE_COOKIE / ~/.erlang.cookie (mode 0400 in prod)
 
 port = 9000
+# Operational endpoints (/health, /ready, /metrics) — no auth; firewall as needed.
+admin_port = 9001
 data_dir = "/var/lib/aether_s3"
 replication_factor = 3
 

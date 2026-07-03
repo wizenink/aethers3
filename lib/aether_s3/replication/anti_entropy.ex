@@ -48,6 +48,7 @@ defmodule AetherS3.Replication.AntiEntropy do
       if Conflict.supersedes?(local_meta, fetch(replica, bucket, key)) do
         Logger.info("anti-entropy: repairing #{bucket}/#{key} → #{replica}")
         Coordinator.push_object(replica, bucket, key, local_meta)
+        :telemetry.execute([:aether, :anti_entropy, :repair], %{count: 1}, %{})
       end
     end)
   end
@@ -65,6 +66,7 @@ defmodule AetherS3.Replication.AntiEntropy do
     if Node.self() not in replicas and safely_replicated?(replicas, bucket, key, meta) do
       Logger.info("rebalance: shedding #{bucket}/#{key} (no longer a replica for it)")
       Receiver.delete(bucket, key)
+      :telemetry.execute([:aether, :anti_entropy, :shed], %{count: 1}, %{})
     end
   end
 

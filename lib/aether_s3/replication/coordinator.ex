@@ -52,6 +52,8 @@ defmodule AetherS3.Replication.Coordinator do
               "stored #{bucket}/#{key} (#{size}B etag=#{etag}) W=#{w} → #{inspect(succeeded)}"
             )
 
+            emit_put(bucket, size, "ok")
+
             Task.start(fn ->
               Enum.each(replicas -- succeeded, fn t ->
                 replicate_to(t, bucket, key, final, meta)
@@ -64,6 +66,7 @@ defmodule AetherS3.Replication.Coordinator do
 
           {:error, :insufficient_replicas} ->
             unless Node.self() in replicas, do: File.rm(final)
+            emit_put(bucket, 0, "insufficient_replicas")
             {:error, :insufficient_replicas, conn}
         end
 
@@ -99,6 +102,16 @@ defmodule AetherS3.Replication.Coordinator do
   end
 
   defp rand_token, do: Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
+
+  # Writes to the reserved multipart bucket are parts, not logical objects.
+  defp emit_put(bucket, bytes, result) do
+    kind = if bucket == Multipart.bucket(), do: "part", else: "object"
+
+    :telemetry.execute([:aether, :object, :put], %{count: 1, bytes: bytes}, %{
+      result: result,
+      kind: kind
+    })
+  end
 
   def push_object(target, bucket, key, meta) do
     if File.exists?(BlobStore.path(bucket, key)) do
@@ -161,7 +174,11 @@ defmodule AetherS3.Replication.Coordinator do
         :not_found
 
       {winner_node, winner_meta, targets} ->
+        :telemetry.execute([:aether, :object, :read], %{count: 1}, %{})
+
         unless targets == [] do
+          :telemetry.execute([:aether, :read_repair], %{count: length(targets)}, %{})
+
           Task.start(fn ->
             Enum.each(targets, fn t -> repair_one(winner_node, t, bucket, key, winner_meta) end)
           end)
@@ -231,6 +248,14 @@ defmodule AetherS3.Replication.Coordinator do
     |> Enum.each(fn node -> delete_from(node, bucket, key) end)
 
     Enum.each(parts, fn p -> delete(Multipart.bucket(), p.key) end)
+
+    # Count logical object deletes only — not the cascaded part deletes above,
+    # nor reaper/abort deletes (which target the reserved bucket).
+    unless bucket == Multipart.bucket() do
+      :telemetry.execute([:aether, :object, :delete], %{count: 1}, %{})
+    end
+
+    :ok
   end
 
   defp manifest_parts(bucket, key) do
@@ -268,6 +293,7 @@ defmodule AetherS3.Replication.Coordinator do
 
       put_manifest(bucket, key, meta)
       delete(Multipart.bucket(), Multipart.init_key(upload_id))
+      :telemetry.execute([:aether, :multipart, :completed], %{count: 1}, %{})
       {:ok, etag}
     end
   end
@@ -364,6 +390,7 @@ defmodule AetherS3.Replication.Coordinator do
       vv: VersionVector.increment(VersionVector.new(), Node.self())
     }
 
+    :telemetry.execute([:aether, :multipart, :initiated], %{count: 1}, %{})
     put_manifest(Multipart.bucket(), Multipart.init_key(upload_id), meta)
   end
 

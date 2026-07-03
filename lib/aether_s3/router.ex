@@ -238,6 +238,7 @@ defmodule AetherS3.Router do
       %{"uploadId" => upload_id} ->
         # abort: delete every part object stored under this upload
         Coordinator.abort_multipart(upload_id)
+        :telemetry.execute([:aether, :multipart, :aborted], %{count: 1}, %{})
         send_resp(conn, 204, "")
 
       _ ->

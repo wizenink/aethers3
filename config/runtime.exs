@@ -9,6 +9,10 @@ config :aether_s3, :credentials, %{
 
 config :aether_s3, :port, String.to_integer(System.get_env("AETHER_PORT", "9000"))
 
+# Operational endpoints (health/readiness/metrics) listen here, separate from the
+# S3 API port so they need no auth and can be firewalled independently.
+config :aether_s3, :admin_port, String.to_integer(System.get_env("AETHER_ADMIN_PORT", "9001"))
+
 # Per-node operational config (env-driven). Test env keeps the values from
 # config/config.exs, so these only apply to dev/prod runtime.
 if config_env() != :test do

@@ -1,0 +1,16 @@
+# Scrapes each AetherS3 node's admin port (/metrics). On the compose network the
+# service names resolve to the containers; Prometheus stamps each series with an
+# `instance` label (aether1:9001, …) so per-node and cluster-wide (sum/max/min)
+# views are both available.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: aether
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - aether1:9001
+          - aether2:9001
+          - aether3:9001

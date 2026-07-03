@@ -47,8 +47,12 @@ defmodule AetherS3.Replication.Reaper do
 
     if is_integer(grace) and leader?() do
       case Coordinator.reap_incomplete_uploads(grace) do
-        0 -> :ok
-        n -> Logger.info("reaper: swept #{n} abandoned multipart upload(s)")
+        0 ->
+          :ok
+
+        n ->
+          Logger.info("reaper: swept #{n} abandoned multipart upload(s)")
+          :telemetry.execute([:aether, :reaper, :mpu], %{count: n}, %{})
       end
     end
   end
@@ -57,8 +61,12 @@ defmodule AetherS3.Replication.Reaper do
     grace = Application.get_env(:aether_s3, :staging_sweep_age_ms, @default_staging_sweep_ms)
 
     case BlobStore.sweep_orphan_temps(grace) do
-      [] -> :ok
-      files -> Logger.info("reaper: swept #{length(files)} orphaned staging temp file(s)")
+      [] ->
+        :ok
+
+      files ->
+        Logger.info("reaper: swept #{length(files)} orphaned staging temp file(s)")
+        :telemetry.execute([:aether, :reaper, :staging], %{count: length(files)}, %{})
     end
   end
 
