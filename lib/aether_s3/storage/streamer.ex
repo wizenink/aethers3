@@ -215,29 +215,57 @@ defmodule AetherS3.Storage.Streamer do
     end)
   end
 
-  # Like stream_slice, but the bytes come from a peer's BlobReader over :erpc.
+  # Like stream_slice, but the bytes come from a peer's BlobReader over :erpc,
+  # with one chunk of read-ahead: the NEXT chunk's fetch is issued (async :erpc)
+  # before the current chunk is emitted, so the cross-node round-trip overlaps
+  # with sending the current chunk to the client rather than serializing behind
+  # it. Only the first chunk pays a full round-trip; the rest are hidden behind
+  # the client send. Constant memory (at most two chunks in flight).
   defp remote_slice(node, bucket, key, start, length) do
-    Stream.resource(
-      fn -> {start, length} end,
-      fn {pos, remaining} ->
-        if remaining <= 0 do
-          {:halt, {pos, remaining}}
-        else
-          to_read = min(remaining, @chunk)
+    fetch = fn pos, remaining ->
+      to_read = min(remaining, @chunk)
 
-          case :erpc.call(node, AetherS3.Replication.BlobReader, :read, [
-                 bucket,
-                 key,
-                 pos,
-                 to_read
-               ]) do
-            {:ok, data} -> {[data], {pos + byte_size(data), remaining - byte_size(data)}}
-            :eof -> {:halt, {pos, 0}}
+      :erpc.send_request(node, AetherS3.Replication.BlobReader, :read, [bucket, key, pos, to_read])
+    end
+
+    Stream.resource(
+      # Prime the pipeline with the first request (state: {pos, remaining, req}).
+      fn -> if length > 0, do: {start, length, fetch.(start, length)}, else: {start, 0, nil} end,
+      fn
+        {_pos, _remaining, nil} = acc ->
+          {:halt, acc}
+
+        {pos, remaining, req} ->
+          case :erpc.receive_response(req) do
+            {:ok, data} ->
+              size = byte_size(data)
+              pos = pos + size
+              remaining = remaining - size
+              # Issue the next fetch now, so it runs while we emit `data`.
+              next = if remaining > 0, do: fetch.(pos, remaining), else: nil
+              {[data], {pos, remaining, next}}
+
+            :eof ->
+              {:halt, {pos, 0, nil}}
           end
-        end
       end,
-      fn _ -> :ok end
+      # If the consumer stops early (client disconnect), best-effort drain the
+      # outstanding prefetch so its response can't linger in a keep-alive
+      # connection process's mailbox. Bounded so a slow/dead peer can't block.
+      fn
+        {_pos, _remaining, nil} -> :ok
+        {_pos, _remaining, req} -> drain(req)
+      end
     )
+  end
+
+  defp drain(req) do
+    _ = :erpc.receive_response(req, 100)
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
   end
 
   # Parse an HTTP Range header value against the object's total size.
