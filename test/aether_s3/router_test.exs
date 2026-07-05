@@ -3,6 +3,9 @@ defmodule AetherS3.RouterTest do
   import Plug.Test
   import Plug.Conn
 
+  alias AetherS3.Replication.Coordinator
+  alias AetherS3.Storage.Multipart
+
   @opts AetherS3.Router.init([])
 
   defp call(conn), do: AetherS3.Router.call(conn, @opts)
@@ -149,12 +152,15 @@ defmodule AetherS3.RouterTest do
     assert call(conn(:post, "/#{bucket}/doomed.bin?uploadId=#{upload_id}", body)).status == 200
 
     # the backing part is a real object under the reserved bucket
-    assert call(conn(:get, "/__mpu__/#{upload_id}/1")).status == 200
+    part_key = Multipart.part_key(upload_id, 1)
+    assert {:ok, _meta, _node} = Coordinator.locate(Multipart.bucket(), part_key)
 
     assert call(conn(:delete, "/#{bucket}/doomed.bin")).status == 204
     # both the object and its backing part are gone
     assert call(conn(:get, "/#{bucket}/doomed.bin")).status == 404
-    assert call(conn(:get, "/__mpu__/#{upload_id}/1")).status == 404
+    assert Coordinator.locate(Multipart.bucket(), part_key) == :not_found
+
+    assert call(conn(:get, "/__mpu__/whatever")).status == 404
   end
 
   test "aborting a multipart upload discards it", %{bucket: bucket} do
@@ -164,6 +170,8 @@ defmodule AetherS3.RouterTest do
 
     assert call(conn(:delete, "/#{bucket}/gone.bin?uploadId=#{upload_id}")).status == 204
     # the object was never completed, so it does not exist
-    assert call(conn(:get, "/#{bucket}/gone.bin")).status == 404
+    resp = call(conn(:get, "/#{bucket}/gone.bin"))
+    assert resp.status == 404
+    assert resp.state == :sent
   end
 end

@@ -8,14 +8,40 @@ defmodule AetherS3.Router do
   alias AetherS3.Storage.Multipart
   alias AetherS3.Replication.Coordinator
 
+  plug(AetherS3.Plug.ReservedBucket)
   plug(AetherS3.Plug.SigV4)
+  plug(AetherS3.Plug.Authorize)
   plug(:match)
   plug(:dispatch)
 
   put "/:bucket" do
+    conn = fetch_query_params(conn)
     bucket = conn.params["bucket"]
-    :ok = ControlPlane.create_bucket(bucket)
-    send_resp(conn, 200, "")
+
+    if Map.has_key?(conn.query_params, "acl") do
+      # Set the bucket's grants (owner/admin only — enforced by the Authorize
+      # plug, which treats PUT on an existing bucket as owner-only).
+      case ControlPlane.set_bucket_grants(bucket, acl_grants(conn)) do
+        :ok ->
+          send_resp(conn, 200, "")
+
+        {:error, :no_such_bucket} ->
+          send_xml(
+            conn,
+            404,
+            XML.error("NoSuchBucket", "The specified bucket does not exist.", conn.request_path)
+          )
+      end
+    else
+      :ok = ControlPlane.create_bucket(bucket, owner_of(conn.assigns[:identity]))
+      # Honor any ACL grant supplied at create time (x-amz-acl / x-amz-grant-*).
+      case acl_grants(conn) do
+        [] -> :ok
+        grants -> ControlPlane.set_bucket_grants(bucket, grants)
+      end
+
+      send_resp(conn, 200, "")
+    end
   end
 
   get "/:bucket" do
@@ -260,4 +286,12 @@ defmodule AetherS3.Router do
   defp http_date(%DateTime{} = dt) do
     Calendar.strftime(dt, "%a, %d %b %Y %H:%M:%S GMT")
   end
+
+  # The owning user for a newly-created bucket: an authenticated identity's user,
+  # or nil when auth is disabled/anonymous (authorization gates who reaches here).
+  defp owner_of(%{user: user}), do: user
+  defp owner_of(_), do: nil
+
+  # Grants requested via ACL headers (x-amz-acl canned, or x-amz-grant-*).
+  defp acl_grants(conn), do: AetherS3.S3.Acl.grants(&get_req_header(conn, &1))
 end

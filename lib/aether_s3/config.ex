@@ -75,6 +75,10 @@ defmodule AetherS3.Config do
     |> put(toml, "data_dir", :data_dir)
     |> put(toml, "replication_factor", :replication_factor)
     |> put(toml, "credentials", :credentials)
+    |> put(toml, "master_key", :master_key)
+    |> put(toml, "admin_token", :admin_token)
+    |> put(toml, "tls_cert", :tls_cert)
+    |> put(toml, "tls_key", :tls_key)
     |> put(toml, "cp_evict_grace", :cp_evict_grace_ms, &(&1 * 1000))
     |> put(toml, "mpu_reap_age", :mpu_reap_age_ms, &(&1 * 1000))
     |> put(toml, "staging_sweep_age", :staging_sweep_age_ms, &(&1 * 1000))
@@ -106,6 +110,28 @@ defmodule AetherS3.Config do
           _ ->
             topology(:local, nil)
         end
+    end
+  end
+
+  @doc """
+  Config-seeded root identities from a TOML `[[root_identities]]` array of tables,
+  or nil if absent. Each entry maps `secret_key` -> the internal `:secret`, and
+  defaults `user` to `"root"` and `admin` to `true`.
+  """
+  def root_identities_from_toml(toml) do
+    case toml["root_identities"] do
+      list when is_list(list) ->
+        Enum.map(list, fn id ->
+          %{
+            access_key: id["access_key"],
+            secret: id["secret_key"] || id["secret"],
+            user: id["user"] || "root",
+            admin: Map.get(id, "admin", true)
+          }
+        end)
+
+      _ ->
+        nil
     end
   end
 

@@ -136,4 +136,24 @@ defmodule AetherS3.ConfigTest do
                [aether: [strategy: Cluster.Strategy.LocalEpmd]]
     end
   end
+
+  describe "root_identities_from_toml/1" do
+    test "nil when there is no [[root_identities]]" do
+      assert Config.root_identities_from_toml(%{"port" => 9000}) == nil
+    end
+
+    test "maps secret_key -> :secret and defaults user/admin" do
+      toml = %{
+        "root_identities" => [
+          %{"access_key" => "AKIA_R", "secret_key" => "s3cr3t"},
+          %{"access_key" => "AKIA_OPS", "secret_key" => "x", "user" => "ops", "admin" => false}
+        ]
+      }
+
+      assert Config.root_identities_from_toml(toml) == [
+               %{access_key: "AKIA_R", secret: "s3cr3t", user: "root", admin: true},
+               %{access_key: "AKIA_OPS", secret: "x", user: "ops", admin: false}
+             ]
+    end
+  end
 end

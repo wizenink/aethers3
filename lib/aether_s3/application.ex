@@ -22,7 +22,7 @@ defmodule AetherS3.Application do
           {AetherS3.ControlPlane.Cluster, name: AetherS3.ControlPlane.Cluster},
           {AetherS3.Replication.AntiEntropy, name: AetherS3.Replication.AntiEntropy},
           {AetherS3.Replication.Reaper, name: AetherS3.Replication.Reaper},
-          {Bandit, plug: AetherS3.Router, scheme: :http, port: port},
+          {Bandit, s3_bandit_opts(port)},
           Supervisor.child_spec(
             {Bandit, plug: AetherS3.AdminRouter, scheme: :http, port: admin_port},
             id: :admin_bandit
@@ -30,6 +30,19 @@ defmodule AetherS3.Application do
         ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: AetherS3.Supervisor)
+  end
+
+  # Serve the S3 API over HTTPS when a cert + key are configured, else plain HTTP
+  # (terminate TLS at a Host-preserving proxy — SigV4 signs Host).
+  defp s3_bandit_opts(port) do
+    cert = Application.get_env(:aether_s3, :tls_cert)
+    key = Application.get_env(:aether_s3, :tls_key)
+
+    if is_binary(cert) and is_binary(key) do
+      [plug: AetherS3.Router, port: port, scheme: :https, certfile: cert, keyfile: key]
+    else
+      [plug: AetherS3.Router, port: port, scheme: :http]
+    end
   end
 
   # libcluster's LocalEpmd strategy needs a distributed node (epmd). A plain

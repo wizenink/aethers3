@@ -1,63 +1,105 @@
 defmodule AetherS3.Plug.SigV4 do
   @moduledoc """
-  Validates AWS Signature V4 on incoming requests.
+  Authenticates incoming requests via AWS Signature V4 and stashes the caller's
+  identity in `conn.assigns[:identity]` for the authorization plug to consume.
+
+  Outcomes:
+
+    * valid signature       -> assign `%{user, admin}`
+    * no Authorization header -> assign `:anonymous` (authorization decides
+      whether the target bucket's ACL permits the request)
+    * bad signature / unknown key / stale date -> 403 AccessDenied, halted
+    * `require_auth == false` -> assign `:auth_disabled` (the whole security
+      layer is off; authorization bypasses on the same flag.
+       Used by the test env and open dev servers.
 
   Rebuilds the canonical request from the live conn using the headers the client
-  listed in SignedHeaders, recomputes the signature with the stored secret, and
+  listed in SignedHeaders, recomputes the signature with the resolved secret, and
   compares it (constant-time) against the signature in the Authorization header.
   """
   @behaviour Plug
   import Plug.Conn
   alias AetherS3.Auth.SigV4
+  alias AetherS3.Auth.Identity
   alias AetherS3.S3.XML
+
+  # Reject requests whose x-amz-date is more than this far from now (replay window).
+  @max_skew_seconds 300
 
   @impl true
   def init(opts), do: opts
 
   @impl true
   def call(conn, _opts) do
-    if Application.get_env(:aether_s3, :require_auth, true) do
-      authenticate(conn)
-    else
-      conn
+    cond do
+      not Application.get_env(:aether_s3, :require_auth, true) ->
+        assign(conn, :identity, :auth_disabled)
+
+      get_req_header(conn, "authorization") == [] ->
+        assign(conn, :identity, :anonymous)
+
+      true ->
+        authenticate(conn)
     end
   end
 
   defp authenticate(conn) do
     with [auth] <- get_req_header(conn, "authorization"),
          {:ok, p} <- parse_auth_header(auth),
-         secret when is_binary(secret) <- secret_for(p.access_key),
-         [amz_date] <- get_req_header(conn, "x-amz-date") do
-      payload_hash =
-        conn |> get_req_header("x-amz-content-sha256") |> List.first() || "UNSIGNED-PAYLOAD"
-
-      headers = signed_header_pairs(conn, p.signed_headers)
-
-      canonical =
-        SigV4.canonical_request(
-          conn.method,
-          conn.request_path,
-          canonical_query(conn),
-          headers,
-          payload_hash
-        )
-
-      sts = SigV4.string_to_sign(amz_date, p.scope, canonical)
-      signing_key = SigV4.derive_signing_key(secret, p.date, p.region, p.service)
-
-      expected = SigV4.signature(signing_key, sts)
-
-      if Plug.Crypto.secure_compare(expected, p.signature) do
-        conn
-      else
-        forbidden(conn)
-      end
+         {:ok, identity} <- Identity.resolve(p.access_key),
+         [amz_date] <- get_req_header(conn, "x-amz-date"),
+         :ok <- check_date_fresh(amz_date),
+         :ok <- verify_signature(conn, p, identity.secret, amz_date) do
+      assign(conn, :identity, %{user: identity.user, admin: identity.admin})
     else
       _ -> forbidden(conn)
     end
   end
 
-  # ===== given helpers (the parsing/extraction drudgery) =====
+  defp verify_signature(conn, p, secret, amz_date) do
+    payload_hash =
+      conn |> get_req_header("x-amz-content-sha256") |> List.first() || "UNSIGNED-PAYLOAD"
+
+    headers = signed_header_pairs(conn, p.signed_headers)
+
+    canonical =
+      SigV4.canonical_request(
+        conn.method,
+        conn.request_path,
+        canonical_query(conn),
+        headers,
+        payload_hash
+      )
+
+    sts = SigV4.string_to_sign(amz_date, p.scope, canonical)
+    signing_key = SigV4.derive_signing_key(secret, p.date, p.region, p.service)
+    expected = SigV4.signature(signing_key, sts)
+
+    if Plug.Crypto.secure_compare(expected, p.signature), do: :ok, else: :error
+  end
+
+  # x-amz-date is basic ISO8601 ("YYYYMMDDTHHMMSSZ").
+  defp check_date_fresh(amz_date) do
+    case parse_amz_date(amz_date) do
+      {:ok, dt} ->
+        if abs(DateTime.diff(DateTime.utc_now(), dt)) <= @max_skew_seconds, do: :ok, else: :error
+
+      :error ->
+        :error
+    end
+  end
+
+  defp parse_amz_date(
+         <<y::binary-size(4), mo::binary-size(2), d::binary-size(2), "T", h::binary-size(2),
+           mi::binary-size(2), s::binary-size(2), "Z">>
+       ) do
+    case DateTime.from_iso8601("#{y}-#{mo}-#{d}T#{h}:#{mi}:#{s}Z") do
+      {:ok, dt, _offset} -> {:ok, dt}
+      _ -> :error
+    end
+  end
+
+  defp parse_amz_date(_), do: :error
 
   # Parse "AWS4-HMAC-SHA256 Credential=AK/DATE/REGION/SERVICE/aws4_request,
   #        SignedHeaders=h;h, Signature=hex" into {:ok, map} or :error.
@@ -85,12 +127,6 @@ defmodule AetherS3.Plug.SigV4 do
     end
   end
 
-  # Look up the secret for an access key, or nil if unknown.
-  def secret_for(access_key) do
-    Application.get_env(:aether_s3, :credentials, %{})[access_key]
-  end
-
-  # Build the {name, value} pairs for exactly the signed headers, in conn order.
   def signed_header_pairs(conn, signed_headers) do
     Enum.map(signed_headers, fn name ->
       value = conn |> get_req_header(name) |> List.first() || ""
@@ -98,7 +134,6 @@ defmodule AetherS3.Plug.SigV4 do
     end)
   end
 
-  # Canonical query string: split, sort by key, rejoin. (conn.query_string is raw.)
   def canonical_query(conn) do
     conn.query_string
     |> URI.query_decoder()
@@ -106,7 +141,6 @@ defmodule AetherS3.Plug.SigV4 do
     |> Enum.map_join("&", fn {k, v} -> "#{URI.encode_www_form(k)}=#{URI.encode_www_form(v)}" end)
   end
 
-  # Send a 403 with an S3 AccessDenied body and stop the pipeline.
   def forbidden(conn) do
     conn
     |> put_resp_content_type("application/xml")

@@ -38,9 +38,35 @@ require_auth = true
 # in-flight writes.
 # staging_sweep_age = 3600
 
-# S3 credentials: access_key = secret_key (one or more pairs).
-[credentials]
-AKIAEXAMPLE = "change-me"
+# --- Security ---
+
+# In-app TLS for the S3 API. Set BOTH to PEM file paths to serve HTTPS directly
+# (no reverse proxy needed). Omit to serve plain HTTP and terminate TLS at a
+# Host-PRESERVING reverse proxy (SigV4 signs the Host header — a proxy that
+# rewrites Host breaks signature validation). The admin port stays HTTP.
+# tls_cert = "/etc/aether_s3/tls/cert.pem"
+# tls_key  = "/etc/aether_s3/tls/key.pem"
+
+# Master key used to encrypt per-user access-key secrets at rest in the control
+# plane. Required once you mint dynamic keys via the admin API. Keep it identical
+# on every node and out of version control.
+# master_key = "a-long-random-passphrase"
+
+# Bootstrap bearer token for the admin identity API (POST /admin/users, etc.) on
+# the admin port. Omit to disable that API entirely (recommended unless in use).
+# admin_token = "a-long-random-token"
+
+# Config-seeded root identities: always-present admin credentials so a fresh
+# cluster is usable before any key is minted. Additional users + keys are created
+# at runtime via the admin API and replicate through the control plane. `user`
+# defaults to "root" and `admin` to true. (Also settable via env:
+# AETHER_ROOT_ACCESS_KEY / AETHER_ROOT_SECRET_KEY.) The old [credentials] map is
+# superseded and no longer read.
+[[root_identities]]
+access_key = "AKIA_ROOT"
+secret_key = "change-me"
+# user = "root"
+# admin = true
 
 # Cluster discovery. Pick ONE strategy:
 #   "dns"    -> DNSPoll: dns_query resolves to all node IPs (containers/k8s)

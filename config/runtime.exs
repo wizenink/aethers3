@@ -7,6 +7,33 @@ config :aether_s3, :credentials, %{
     System.get_env("AETHER_SECRET_KEY", "devsecret")
 }
 
+# Config-seeded root identity: an always-present admin so a fresh cluster is
+# usable before any keys are minted. The secret lives in config (host-protected),
+# not in the encrypted Khepri store.
+config :aether_s3, :root_identities, [
+  %{
+    access_key: System.get_env("AETHER_ROOT_ACCESS_KEY", "AKIAEXAMPLE"),
+    secret: System.get_env("AETHER_ROOT_SECRET_KEY", "devsecret"),
+    user: "root",
+    admin: true
+  }
+]
+
+# Master key (passphrase) for encrypting per-key secrets at rest; identical on
+# every node. Unset when only the config root is used.
+config :aether_s3, :master_key, System.get_env("AETHER_MASTER_KEY")
+
+# Bootstrap bearer token gating the admin user/key API on the admin port.
+# Unset -> the admin management API is disabled (it refuses every request), so
+# a node without a token configured can't have users minted against it.
+config :aether_s3, :admin_token, System.get_env("AETHER_ADMIN_TOKEN")
+
+# In-app TLS for the S3 API: set BOTH to PEM file paths to serve HTTPS directly
+# (no reverse proxy needed). Unset -> plain HTTP (terminate TLS at a
+# Host-preserving proxy instead). The admin port stays HTTP (firewall it).
+if cert = System.get_env("AETHER_TLS_CERT"), do: config(:aether_s3, :tls_cert, cert)
+if key = System.get_env("AETHER_TLS_KEY"), do: config(:aether_s3, :tls_key, key)
+
 config :aether_s3, :port, String.to_integer(System.get_env("AETHER_PORT", "9000"))
 
 # Operational endpoints (health/readiness/metrics) listen here, separate from the
@@ -126,6 +153,9 @@ if File.exists?(toml_path) do
   end
 
   if v = toml["log_level"], do: config(:logger, level: AetherS3.Config.log_level(v))
+
+  if roots = AetherS3.Config.root_identities_from_toml(toml),
+    do: config(:aether_s3, :root_identities, roots)
 
   if topologies = AetherS3.Config.topology_from_toml(toml),
     do: config(:libcluster, topologies: topologies)

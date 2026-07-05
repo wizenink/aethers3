@@ -10,6 +10,8 @@ defmodule AetherS3.AdminRouter do
     * `GET /metrics` — Prometheus exposition (`AetherS3.Telemetry.scrape/0`).
     * `GET /cluster` — best-effort JSON snapshot of every node's view
       (`AetherS3.Cluster.Status.snapshot/0`); handy during a partition.
+    * `/admin/*` — dynamic identity management (`AetherS3.Admin.ApiRouter`),
+      gated by a bootstrap bearer token. The probe endpoints above stay open.
   """
   use Plug.Router
 
@@ -39,6 +41,8 @@ defmodule AetherS3.AdminRouter do
     |> put_resp_content_type("application/json")
     |> send_resp(200, JSON.encode!(AetherS3.Cluster.Status.snapshot()))
   end
+
+  forward("/admin", to: AetherS3.Admin.ApiRouter)
 
   match _ do
     send_resp(conn, 404, "not found")
