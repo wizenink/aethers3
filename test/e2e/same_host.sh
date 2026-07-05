@@ -68,6 +68,13 @@ log "probing admin endpoints (health/ready/metrics)..."
 for i in "${!NODES[@]}"; do
   curl -fsS "http://127.0.0.1:${ADMIN_PORTS[$i]}/health" >/dev/null || fail "node $i /health not 200"
 done
+# aether_cluster_nodes is a last_value gauge emitted by the 10s telemetry
+# poller, so it only appears after the first tick — retry until it shows up
+# (the cluster can form faster than the poller's first emit).
+for _ in $(seq 1 20); do
+  curl -fsS "http://127.0.0.1:${ADMIN_PORTS[0]}/metrics" | grep -q "aether_cluster_nodes" && break
+  sleep 1
+done
 curl -fsS "http://127.0.0.1:${ADMIN_PORTS[0]}/metrics" | grep -q "aether_cluster_nodes" ||
   fail "metrics missing aether_cluster_nodes"
 
