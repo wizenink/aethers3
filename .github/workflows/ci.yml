@@ -23,7 +23,7 @@ jobs:
         uses: erlef/setup-beam@v1
         with:
           # Keep in step with mix.exs (elixir: "~> 1.20").
-          otp-version: "27"
+          otp-version: "29"
           elixir-version: "1.20"
 
       - name: Cache deps and build
@@ -57,7 +57,7 @@ jobs:
       - name: Set up Elixir/OTP
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "27"
+          otp-version: "29"
           elixir-version: "1.20"
 
       - name: Cache deps and build

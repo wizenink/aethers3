@@ -1,2 +1,5 @@
 [tools]
+# Pinned to OTP 29 to match the CI/Docker release builds (elixir:1.20-otp-29).
+erlang = "29.0.2"
+elixir = "1.20.1-otp-29"
 zig = "0.15.2"
