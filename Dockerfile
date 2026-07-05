@@ -1,7 +1,7 @@
 # Multi-stage: build the release in an Elixir image, ship it on a slim runtime
 # (the release bundles erts, so the runtime image needs no Erlang/Elixir).
 ARG ELIXIR_IMAGE=elixir:1.20-otp-29-slim
-ARG RUNTIME_IMAGE=debian:bookworm-slim
+ARG RUNTIME_IMAGE=debian:trixie-slim
 
 # ---- build ----
 FROM ${ELIXIR_IMAGE} AS build
