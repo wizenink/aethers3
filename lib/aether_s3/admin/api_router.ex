@@ -25,8 +25,11 @@ defmodule AetherS3.Admin.ApiRouter do
     case read_json(conn) do
       {:ok, %{"name" => name} = body, conn} ->
         admin = Map.get(body, "admin", false) == true
-        ControlPlane.put_user(name, admin)
-        json(conn, 201, %{name: name, admin: admin})
+
+        case ControlPlane.put_user(name, admin) do
+          :ok -> json(conn, 201, %{name: name, admin: admin})
+          {:error, :unavailable} -> unavailable(conn)
+        end
 
       _ ->
         json(conn, 400, %{error: "expected a JSON body with a \"name\""})
@@ -40,8 +43,7 @@ defmodule AetherS3.Admin.ApiRouter do
 
   delete "/users/:name" do
     # Orphaned buckets (owner now gone) become admin-only, which is safe.
-    :ok = ControlPlane.delete_user(name)
-    send_resp(conn, 204, "")
+    reply_204(conn, ControlPlane.delete_user(name))
   end
 
   post "/users/:name/keys" do
@@ -57,20 +59,24 @@ defmodule AetherS3.Admin.ApiRouter do
 
           {:error, :no_master_key} ->
             json(conn, 503, %{error: "AETHER_MASTER_KEY not configured"})
+
+          {:error, :unavailable} ->
+            unavailable(conn)
         end
     end
   end
 
   delete "/keys/:access_key" do
-    :ok = ControlPlane.delete_key(access_key)
-    send_resp(conn, 204, "")
+    reply_204(conn, ControlPlane.delete_key(access_key))
   end
 
   post "/groups" do
     case read_json(conn) do
       {:ok, %{"name" => name}, conn} ->
-        ControlPlane.put_group(name, [])
-        json(conn, 201, %{name: name, members: []})
+        case ControlPlane.put_group(name, []) do
+          :ok -> json(conn, 201, %{name: name, members: []})
+          {:error, :unavailable} -> unavailable(conn)
+        end
 
       _ ->
         json(conn, 400, %{error: "expected a JSON body with a \"name\""})
@@ -83,8 +89,7 @@ defmodule AetherS3.Admin.ApiRouter do
   end
 
   delete "/groups/:name" do
-    ControlPlane.delete_group(name)
-    send_resp(conn, 204, "")
+    reply_204(conn, ControlPlane.delete_group(name))
   end
 
   post "/groups/:name/members" do
@@ -93,6 +98,7 @@ defmodule AetherS3.Admin.ApiRouter do
         case ControlPlane.add_group_member(name, user) do
           :ok -> send_resp(conn, 204, "")
           {:error, :no_such_group} -> json(conn, 404, %{error: "no such group"})
+          {:error, :unavailable} -> unavailable(conn)
         end
 
       _ ->
@@ -104,6 +110,7 @@ defmodule AetherS3.Admin.ApiRouter do
     case ControlPlane.remove_group_member(name, user) do
       :ok -> send_resp(conn, 204, "")
       {:error, :no_such_group} -> json(conn, 404, %{error: "no such group"})
+      {:error, :unavailable} -> unavailable(conn)
     end
   end
 
@@ -136,13 +143,21 @@ defmodule AetherS3.Admin.ApiRouter do
         access_key = "AKIA" <> (:crypto.strong_rand_bytes(12) |> Base.encode32(padding: false))
         secret = :crypto.strong_rand_bytes(24) |> Base.url_encode64(padding: false)
         enc = SecretBox.encrypt(secret, SecretBox.derive_key(m))
-        :ok = ControlPlane.put_key(access_key, user, enc)
-        {:ok, access_key, secret}
+
+        case ControlPlane.put_key(access_key, user, enc) do
+          :ok -> {:ok, access_key, secret}
+          {:error, :unavailable} -> {:error, :unavailable}
+        end
 
       _ ->
         {:error, :no_master_key}
     end
   end
+
+  defp reply_204(conn, :ok), do: send_resp(conn, 204, "")
+  defp reply_204(conn, {:error, :unavailable}), do: unavailable(conn)
+
+  defp unavailable(conn), do: json(conn, 503, %{error: "control plane unavailable"})
 
   defp read_json(conn) do
     with {:ok, body, conn} <- read_body(conn),

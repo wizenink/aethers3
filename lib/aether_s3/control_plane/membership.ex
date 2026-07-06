@@ -12,6 +12,33 @@ defmodule AetherS3.ControlPlane.Membership do
   def data_dir, do: Application.get_env(:aether_s3, :data_dir, "tmp/aether_data")
   def khepri_dir, do: Path.join(data_dir(), "khepri")
   def marker_path, do: Path.join(data_dir(), ".cp_clustered")
+  def node_marker_path, do: Path.join(data_dir(), ".cp_node")
+
+  @doc "The node name this data dir's Raft state belongs to, or nil if unrecorded."
+  def recorded_node do
+    case File.read(node_marker_path()) do
+      {:ok, name} -> String.trim(name)
+      _ -> nil
+    end
+  end
+
+  @doc "Record the current node as the owner of this data dir's Raft state."
+  def record_node do
+    File.mkdir_p!(data_dir())
+    File.write!(node_marker_path(), to_string(Node.self()))
+  end
+
+  @doc """
+  Was this data dir's Raft state created under a DIFFERENT node name than the one
+  we're running as now? Booting a renamed node against existing state wedges the
+  control plane (Ra membership references a node that no longer exists).
+  """
+  def node_changed? do
+    case recorded_node() do
+      nil -> false
+      recorded -> recorded != to_string(Node.self())
+    end
+  end
 
   @doc "Breadcrumb written once we're confirmed in a multi-node cluster."
   def mark_clustered do
@@ -28,6 +55,7 @@ defmodule AetherS3.ControlPlane.Membership do
   def wipe_khepri do
     File.rm_rf(khepri_dir())
     File.rm(marker_path())
+    File.rm(node_marker_path())
   end
 
   @doc """

@@ -31,16 +31,24 @@ defmodule AetherS3.Router do
             404,
             XML.error("NoSuchBucket", "The specified bucket does not exist.", conn.request_path)
           )
+
+        {:error, :unavailable} ->
+          unavailable(conn)
       end
     else
-      :ok = ControlPlane.create_bucket(bucket, owner_of(conn.assigns[:identity]))
-      # Honor any ACL grant supplied at create time (x-amz-acl / x-amz-grant-*).
-      case acl_grants(conn) do
-        [] -> :ok
-        grants -> ControlPlane.set_bucket_grants(bucket, grants)
-      end
+      case ControlPlane.create_bucket(bucket, owner_of(conn.assigns[:identity])) do
+        :ok ->
+          # Honor any ACL grant supplied at create time (x-amz-acl / x-amz-grant-*).
+          case acl_grants(conn) do
+            [] -> :ok
+            grants -> ControlPlane.set_bucket_grants(bucket, grants)
+          end
 
-      send_resp(conn, 200, "")
+          send_resp(conn, 200, "")
+
+        {:error, :unavailable} ->
+          unavailable(conn)
+      end
     end
   end
 
@@ -69,6 +77,7 @@ defmodule AetherS3.Router do
     case ControlPlane.delete_bucket(bucket) do
       :ok -> send_resp(conn, 204, "")
       {:error, :not_empty} -> send_resp(conn, 409, "BucketNotEmpty\n")
+      {:error, :unavailable} -> unavailable(conn)
     end
   end
 
@@ -294,4 +303,13 @@ defmodule AetherS3.Router do
 
   # Grants requested via ACL headers (x-amz-acl canned, or x-amz-grant-*).
   defp acl_grants(conn), do: AetherS3.S3.Acl.grants(&get_req_header(conn, &1))
+
+  # The control plane couldn't commit (no reachable Raft leader) — fail fast.
+  defp unavailable(conn) do
+    send_xml(
+      conn,
+      503,
+      XML.error("ServiceUnavailable", "The control plane is unavailable.", conn.request_path)
+    )
+  end
 end

@@ -6,8 +6,10 @@ defmodule AetherS3.Plug.SigV4 do
   Outcomes:
 
     * valid signature       -> assign `%{user, admin}`
-    * no Authorization header -> assign `:anonymous` (authorization decides
-      whether the target bucket's ACL permits the request)
+    * no Authorization header but a presigned URL (SigV4 in the query string) ->
+      verify that and assign the signer's identity
+    * no Authorization header, not presigned -> assign `:anonymous` (authorization
+      decides whether the target bucket's grants permit the request)
     * bad signature / unknown key / stale date -> 403 AccessDenied, halted
     * `require_auth == false` -> assign `:auth_disabled` (the whole security
       layer is off; authorization bypasses on the same flag.
@@ -35,11 +37,14 @@ defmodule AetherS3.Plug.SigV4 do
       not Application.get_env(:aether_s3, :require_auth, true) ->
         assign(conn, :identity, :auth_disabled)
 
-      get_req_header(conn, "authorization") == [] ->
-        assign(conn, :identity, :anonymous)
+      get_req_header(conn, "authorization") != [] ->
+        authenticate(conn)
+
+      presigned?(conn) ->
+        authenticate_presigned(conn)
 
       true ->
-        authenticate(conn)
+        assign(conn, :identity, :anonymous)
     end
   end
 
@@ -76,6 +81,92 @@ defmodule AetherS3.Plug.SigV4 do
     expected = SigV4.signature(signing_key, sts)
 
     if Plug.Crypto.secure_compare(expected, p.signature), do: :ok, else: :error
+  end
+
+  # --- presigned URLs (SigV4 carried in the query string) ---
+
+  defp presigned?(conn), do: String.contains?(conn.query_string, "X-Amz-Signature=")
+
+  defp authenticate_presigned(conn) do
+    conn = fetch_query_params(conn)
+
+    with {:ok, p} <- parse_presigned(conn.query_params),
+         {:ok, identity} <- Identity.resolve(p.access_key),
+         :ok <- check_presign_expiry(p.amz_date, p.expires),
+         :ok <- verify_presigned(conn, p, identity.secret) do
+      assign(conn, :identity, %{user: identity.user, admin: identity.admin})
+    else
+      _ -> forbidden(conn)
+    end
+  end
+
+  defp parse_presigned(
+         %{
+           "X-Amz-Credential" => cred,
+           "X-Amz-Date" => amz_date,
+           "X-Amz-Expires" => expires,
+           "X-Amz-Signature" => signature
+         } = q
+       ) do
+    with [access_key, date, region, service, "aws4_request"] <- String.split(cred, "/"),
+         {expires, ""} <- Integer.parse(expires) do
+      {:ok,
+       %{
+         access_key: access_key,
+         date: date,
+         region: region,
+         service: service,
+         scope: "#{date}/#{region}/#{service}/aws4_request",
+         amz_date: amz_date,
+         expires: expires,
+         signed_headers: String.split(q["X-Amz-SignedHeaders"] || "host", ";"),
+         signature: signature
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_presigned(_), do: :error
+
+  # Valid from X-Amz-Date to X-Amz-Date + X-Amz-Expires (and not signed in the future).
+  defp check_presign_expiry(amz_date, expires) do
+    case parse_amz_date(amz_date) do
+      {:ok, dt} ->
+        diff = DateTime.diff(DateTime.utc_now(), dt)
+        if diff >= -@max_skew_seconds and diff <= expires, do: :ok, else: :error
+
+      :error ->
+        :error
+    end
+  end
+
+  defp verify_presigned(conn, p, secret) do
+    headers = signed_header_pairs(conn, p.signed_headers)
+
+    canonical =
+      SigV4.canonical_request(
+        conn.method,
+        conn.request_path,
+        presigned_canonical_query(conn),
+        headers,
+        "UNSIGNED-PAYLOAD"
+      )
+
+    sts = SigV4.string_to_sign(p.amz_date, p.scope, canonical)
+    signing_key = SigV4.derive_signing_key(secret, p.date, p.region, p.service)
+    expected = SigV4.signature(signing_key, sts)
+
+    if Plug.Crypto.secure_compare(expected, p.signature), do: :ok, else: :error
+  end
+
+  # Every query param except X-Amz-Signature, sorted (already URL-encoded as sent).
+  defp presigned_canonical_query(conn) do
+    conn.query_string
+    |> String.split("&", trim: true)
+    |> Enum.reject(&String.starts_with?(&1, "X-Amz-Signature="))
+    |> Enum.sort()
+    |> Enum.join("&")
   end
 
   # x-amz-date is basic ISO8601 ("YYYYMMDDTHHMMSSZ").

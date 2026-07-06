@@ -4,35 +4,29 @@ defmodule AetherS3.ControlPlane.Store do
   # KHEPRI_WILDCARD_STAR — the #if_name_matches{regex = any} record as a tuple.
   # Matches any single child name, so [:users, @star] enumerates every user node.
   @star {:if_name_matches, :any, :undefined}
+  @store :khepri
+  @default_cp_timeout 5_000
 
   alias AetherS3.Auth.Grants
 
   @impl AetherS3.ControlPlane
   def create_bucket(name, owner) do
-    :khepri.put([:buckets, name], %{created_at: DateTime.utc_now(), owner: owner, grants: []})
+    cp_put([:buckets, name], %{created_at: DateTime.utc_now(), owner: owner, grants: []})
   end
 
   @impl AetherS3.ControlPlane
   def bucket_exists?(name) do
-    :khepri.exists([:buckets, name])
+    match?(true, :khepri.exists(@store, [:buckets, name], %{timeout: cp_timeout()}))
   end
 
   @impl AetherS3.ControlPlane
-  def get_bucket(name) do
-    case :khepri.get([:buckets, name]) do
-      {:ok, data} when is_map(data) -> data
-      _ -> nil
-    end
-  end
+  def get_bucket(name), do: cp_get([:buckets, name])
 
   @impl AetherS3.ControlPlane
   def set_bucket_grants(name, grants) do
     case get_bucket(name) do
-      nil ->
-        {:error, :no_such_bucket}
-
-      record ->
-        :khepri.put([:buckets, name], record |> Map.put(:grants, grants) |> Map.delete(:acl))
+      nil -> {:error, :no_such_bucket}
+      record -> cp_put([:buckets, name], record |> Map.put(:grants, grants) |> Map.delete(:acl))
     end
   end
 
@@ -44,27 +38,22 @@ defmodule AetherS3.ControlPlane.Store do
   @impl AetherS3.ControlPlane
   def delete_bucket(name) do
     case AetherS3.Replication.Coordinator.list(name) do
-      [] -> :khepri.delete([:buckets, name])
+      [] -> cp_delete([:buckets, name])
       _ -> {:error, :not_empty}
     end
   end
 
   @impl AetherS3.ControlPlane
   def put_user(name, admin) do
-    :khepri.put([:users, name], %{admin: admin, created_at: DateTime.utc_now()})
+    cp_put([:users, name], %{admin: admin, created_at: DateTime.utc_now()})
   end
 
   @impl AetherS3.ControlPlane
-  def get_user(name) do
-    case :khepri.get([:users, name]) do
-      {:ok, data} when is_map(data) -> data
-      _ -> nil
-    end
-  end
+  def get_user(name), do: cp_get([:users, name])
 
   @impl AetherS3.ControlPlane
   def put_key(access_key, user, secret_enc) do
-    :khepri.put([:keys, access_key], %{
+    cp_put([:keys, access_key], %{
       user: user,
       secret_enc: secret_enc,
       created_at: DateTime.utc_now()
@@ -72,65 +61,39 @@ defmodule AetherS3.ControlPlane.Store do
   end
 
   @impl AetherS3.ControlPlane
-  def get_key(access_key) do
-    case :khepri.get([:keys, access_key]) do
-      {:ok, data} when is_map(data) -> data
-      _ -> nil
-    end
-  end
+  def get_key(access_key), do: cp_get([:keys, access_key])
 
   @impl AetherS3.ControlPlane
-  def delete_key(access_key) do
-    :khepri.delete([:keys, access_key])
-  end
+  def delete_key(access_key), do: cp_delete([:keys, access_key])
 
   @impl AetherS3.ControlPlane
-  def list_users do
-    case :khepri.get_many([:users, @star]) do
-      {:ok, map} -> Enum.map(map, fn {path, data} -> Map.put(data, :name, List.last(path)) end)
-      _ -> []
-    end
-  end
+  def list_users, do: named(cp_get_many([:users, @star]))
 
   @impl AetherS3.ControlPlane
   def keys_of(user) do
-    case :khepri.get_many([:keys, @star]) do
-      {:ok, map} -> for {path, %{user: ^user}} <- map, do: List.last(path)
-      _ -> []
-    end
+    for {path, %{user: ^user}} <- cp_get_many([:keys, @star]), do: List.last(path)
   end
 
   @impl AetherS3.ControlPlane
   def delete_user(name) do
     # Cascade: a user's access keys go with them.
     Enum.each(keys_of(name), &delete_key/1)
-    :khepri.delete([:users, name])
-    :ok
+    cp_delete([:users, name])
   end
 
   @impl AetherS3.ControlPlane
   def put_group(name, members) do
-    :khepri.put([:groups, name], %{members: Enum.uniq(members), created_at: DateTime.utc_now()})
+    cp_put([:groups, name], %{members: Enum.uniq(members), created_at: DateTime.utc_now()})
   end
 
   @impl AetherS3.ControlPlane
-  def get_group(name) do
-    case :khepri.get([:groups, name]) do
-      {:ok, data} when is_map(data) -> data
-      _ -> nil
-    end
-  end
+  def get_group(name), do: cp_get([:groups, name])
 
   @impl AetherS3.ControlPlane
-  def list_groups do
-    case :khepri.get_many([:groups, @star]) do
-      {:ok, map} -> Enum.map(map, fn {path, data} -> Map.put(data, :name, List.last(path)) end)
-      _ -> []
-    end
-  end
+  def list_groups, do: named(cp_get_many([:groups, @star]))
 
   @impl AetherS3.ControlPlane
-  def delete_group(name), do: :khepri.delete([:groups, name])
+  def delete_group(name), do: cp_delete([:groups, name])
 
   @impl AetherS3.ControlPlane
   def add_group_member(name, user) do
@@ -151,12 +114,47 @@ defmodule AetherS3.ControlPlane.Store do
   # Groups the user belongs to (scan-and-filter — fine at our scale).
   @impl AetherS3.ControlPlane
   def groups_of(user) do
-    case :khepri.get_many([:groups, @star]) do
-      {:ok, map} ->
-        for {path, %{members: members}} <- map, user in members, do: List.last(path)
+    for {path, %{members: members}} <- cp_get_many([:groups, @star]),
+        user in members,
+        do: List.last(path)
+  end
 
-      _ ->
-        []
+  # --- bounded Khepri access ---
+  #
+  # Every control-plane command carries a timeout, so a wedged store (e.g. stale
+  # Raft membership with no reachable leader) fails fast instead of hanging the
+  # request forever. Writes surface `{:error, :unavailable}` (the HTTP layer maps
+  # it to 503); reads degrade to empty/nil.
+
+  defp cp_timeout, do: Application.get_env(:aether_s3, :cp_timeout, @default_cp_timeout)
+
+  defp cp_put(path, data) do
+    case :khepri.put(@store, path, data, %{timeout: cp_timeout()}) do
+      :ok -> :ok
+      {:error, _} -> {:error, :unavailable}
     end
   end
+
+  defp cp_delete(path) do
+    case :khepri.delete(@store, path, %{timeout: cp_timeout()}) do
+      :ok -> :ok
+      {:error, _} -> {:error, :unavailable}
+    end
+  end
+
+  defp cp_get(path) do
+    case :khepri.get(@store, path, %{timeout: cp_timeout()}) do
+      {:ok, data} when is_map(data) -> data
+      _ -> nil
+    end
+  end
+
+  defp cp_get_many(pattern) do
+    case :khepri.get_many(@store, pattern, %{timeout: cp_timeout()}) do
+      {:ok, map} -> map
+      _ -> %{}
+    end
+  end
+
+  defp named(map), do: Enum.map(map, fn {path, data} -> Map.put(data, :name, List.last(path)) end)
 end

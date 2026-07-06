@@ -1,11 +1,17 @@
 defmodule AetherS3.ControlPlane.Khepri do
   @moduledoc """
-  Starts the local Khepri store. Before starting, it runs an eviction GATE: if we
-  have prior cluster state (marker) but a peer that is in a multi-node cluster says
-  we're no longer a member, we were evicted while down — so we wipe the stale Ra
-  dir BEFORE `:khepri.start`. This avoids the wedge entirely (a store booted with
-  stale membership cannot be reset or stopped in-process — both hang), so recovery
-  needs no external restarter; the node simply boots fresh and rejoins.
+  Starts the local Khepri store. Before starting, it runs two boot checks:
+
+    * eviction GATE — if we have prior cluster state (marker) but a peer that is in
+      a multi-node cluster says we're no longer a member, we were evicted while
+      down, so we wipe the stale Ra dir BEFORE `:khepri.start`. This avoids the
+      wedge entirely (a store booted with stale membership cannot be reset or
+      stopped in-process — both hang); the node simply boots fresh and rejoins.
+    * node-identity GUARD — if this data dir's Raft state was created under a
+      different node name than we're running as now, booting would wedge the
+      control plane (Ra membership references a node that no longer exists), so we
+      refuse to start with a clear error instead. (A same-name node that has merely
+      lost quorum is left to keep running and rejoin — that's not a wedge.)
   """
   require Logger
 
@@ -19,8 +25,29 @@ defmodule AetherS3.ControlPlane.Khepri do
 
   def start_link do
     gate_against_eviction()
+    guard_node_identity()
     {:ok, _store} = :khepri.start(Membership.khepri_dir())
     :ignore
+  end
+
+  # Refuse to boot a renamed node against existing Raft state (it would wedge the
+  # control plane). Otherwise record this node as the owner of the dir's state.
+  defp guard_node_identity do
+    if Membership.node_changed?() do
+      Logger.error(
+        "Khepri: this data dir's control-plane state belongs to node " <>
+          "#{Membership.recorded_node()}, but this node is #{Node.self()}. Booting a " <>
+          "renamed node against existing Raft state wedges the control plane — refusing " <>
+          "to start. Use the original node name (RELEASE_NODE / --sname), or start with a " <>
+          "fresh AETHER_DATA_DIR."
+      )
+
+      # Logger is async — flush before halting or the message never prints.
+      Logger.flush()
+      System.halt(1)
+    else
+      Membership.record_node()
+    end
   end
 
   # Only relevant if we were a member before. Wait briefly for a clustered peer
