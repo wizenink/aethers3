@@ -65,8 +65,19 @@ log "cluster formed."
 # --- admin endpoints: each node's health + a metrics scrape (also guards the
 #     same-host admin-port-collision regression) ---
 log "probing admin endpoints (health/ready/metrics)..."
+# "cluster membership (3)" is logged by the cluster reconciler as soon as the BEAM
+# nodes connect — which can be BEFORE the admin Bandit (a later child) has bound.
+# So retry each node's /health until its listener is up rather than probing once.
 for i in "${!NODES[@]}"; do
-  curl -fsS "http://127.0.0.1:${ADMIN_PORTS[$i]}/health" >/dev/null || fail "node $i /health not 200"
+  ok=false
+  for _ in $(seq 1 30); do
+    curl -fsS "http://127.0.0.1:${ADMIN_PORTS[$i]}/health" >/dev/null 2>&1 && {
+      ok=true
+      break
+    }
+    sleep 1
+  done
+  [ "$ok" = true ] || fail "node $i /health not 200"
 done
 # aether_cluster_nodes is a last_value gauge emitted by the 10s telemetry
 # poller, so it only appears after the first tick — retry until it shows up

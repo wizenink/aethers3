@@ -148,16 +148,26 @@ log "healing partition..."
 heal
 wait_log "$(c "$MAJ_NODE")" "cluster membership ($N)" 60 || fail "cluster did not re-form after heal"
 log "waiting for resync + convergence..."
-sleep 20
 
-# Theory 1 recovery: the majority's bucket is now visible from the minority side.
+# Theory 1 recovery: the majority's bucket resyncs to the minority. Poll — the CP
+# tree resync can lag the raw membership re-forming.
 log "Theory 1: majority's bucket 'majonly' visible from the minority side after heal..."
+for _ in $(seq 1 40); do
+  awsd "$MIN_IP" s3api head-bucket --bucket majonly >/dev/null 2>&1 && break
+  sleep 1
+done
 awsd "$MIN_IP" s3api head-bucket --bucket majonly >/dev/null 2>&1 || fail "minority did not resync the control plane (majonly missing)"
 
-# Theory 2 recovery: key converges to the LWW winner (vMAJ) on the minority side.
+# Theory 2 recovery: key converges to the LWW winner (vMAJ). Poll — read-repair
+# needs the inter-node links fully back before the minority serves the majority's
+# value; a fixed sleep race here was the test's main flake.
 log "Theory 2: key converged to the LWW winner on the minority side..."
-awsd "$MIN_IP" s3 cp s3://sb/k /data/k.min >/dev/null
-got="$(cat "$WORKDIR/k.min")"
+got=""
+for _ in $(seq 1 40); do
+  awsd "$MIN_IP" s3 cp s3://sb/k /data/k.min >/dev/null 2>&1 && got="$(cat "$WORKDIR/k.min")"
+  [ "$got" = "vMAJ" ] && break
+  sleep 1
+done
 [ "$got" = "vMAJ" ] || fail "minority side did not converge to LWW winner: got '$got', want 'vMAJ'"
 awsd "$MAJ_IP" s3 cp s3://sb/k /data/k.maj >/dev/null
 [ "$(cat "$WORKDIR/k.maj")" = "vMAJ" ] || fail "majority side value is not the LWW winner"

@@ -16,7 +16,7 @@ defmodule AetherS3.ControlPlane.Store do
 
   @impl AetherS3.ControlPlane
   def bucket_exists?(name) do
-    match?(true, :khepri.exists(@store, [:buckets, name], %{timeout: cp_timeout()}))
+    match?(true, :khepri.exists(@store, [:buckets, name], read_opts()))
   end
 
   @impl AetherS3.ControlPlane
@@ -121,12 +121,16 @@ defmodule AetherS3.ControlPlane.Store do
 
   # --- bounded Khepri access ---
   #
-  # Every control-plane command carries a timeout, so a wedged store (e.g. stale
-  # Raft membership with no reachable leader) fails fast instead of hanging the
-  # request forever. Writes surface `{:error, :unavailable}` (the HTTP layer maps
-  # it to 503); reads degrade to empty/nil.
+  # Every control-plane command/query carries a timeout, so a wedged store (e.g.
+  # stale Raft membership with no reachable leader) fails fast instead of hanging
+  # forever: writes surface `{:error, :unavailable}` (the HTTP layer maps it to
+  # 503) and reads degrade to nil/empty. Reads keep Khepri's default consistency
+  # (a partitioned follower still resolves committed state via the leader once
+  # reconnected — the minority's local state can lag a resync).
 
   defp cp_timeout, do: Application.get_env(:aether_s3, :cp_timeout, @default_cp_timeout)
+
+  defp read_opts, do: %{timeout: cp_timeout()}
 
   defp cp_put(path, data) do
     case :khepri.put(@store, path, data, %{timeout: cp_timeout()}) do
@@ -143,14 +147,14 @@ defmodule AetherS3.ControlPlane.Store do
   end
 
   defp cp_get(path) do
-    case :khepri.get(@store, path, %{timeout: cp_timeout()}) do
+    case :khepri.get(@store, path, read_opts()) do
       {:ok, data} when is_map(data) -> data
       _ -> nil
     end
   end
 
   defp cp_get_many(pattern) do
-    case :khepri.get_many(@store, pattern, %{timeout: cp_timeout()}) do
+    case :khepri.get_many(@store, pattern, read_opts()) do
       {:ok, map} -> map
       _ -> %{}
     end
