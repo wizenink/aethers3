@@ -44,10 +44,10 @@ PID=$!
 
 log "waiting for readiness..."
 for _ in $(seq 1 60); do
-  curl -fsS "http://127.0.0.1:$ADMIN_PORT/ready" >/dev/null 2>&1 && break
+  curl -fsS "http://127.0.0.1:$ADMIN_PORT/ready/cp" >/dev/null 2>&1 && break
   sleep 1
 done
-curl -fsS "http://127.0.0.1:$ADMIN_PORT/ready" >/dev/null 2>&1 || fail "node not ready"
+curl -fsS "http://127.0.0.1:$ADMIN_PORT/ready/cp" >/dev/null 2>&1 || fail "node not ready"
 
 log "creating bucket + object (signed, as root)..."
 for _ in $(seq 1 30); do aws_ s3 mb s3://presign >/dev/null 2>&1 && break; sleep 1; done

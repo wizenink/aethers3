@@ -15,11 +15,26 @@ defmodule AetherS3.AdminRouterTest do
     assert conn.resp_body == "ok"
   end
 
-  test "GET /ready is 200 once Khepri has elected a leader" do
-    wait_for_leader()
+  test "GET /ready is 200 when the core data-plane services are up" do
     conn = request(:get, "/ready")
     assert conn.status == 200
     assert conn.resp_body == "ready"
+  end
+
+  test "GET /ready/cp is 200 when the control plane can commit" do
+    wait_for_leader()
+    conn = request(:get, "/ready/cp")
+    assert conn.status == 200
+    assert conn.resp_body == "ready"
+  end
+
+  test "GET /ready/cp is 503 when the leader-routed probe can't commit" do
+    Application.put_env(:aether_s3, :ready_probe_timeout, 0)
+    on_exit(fn -> Application.delete_env(:aether_s3, :ready_probe_timeout) end)
+
+    conn = request(:get, "/ready/cp")
+    assert conn.status == 503
+    assert conn.resp_body == "not ready"
   end
 
   test "GET /metrics serves Prometheus text with our gauges" do

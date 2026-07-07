@@ -8,7 +8,8 @@ off from public traffic. (The `/admin/*` identity-management API on the same por
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /health` | Liveness — 200 as long as the process can respond. |
-| `GET /ready` | Readiness — 200 once this node knows a Khepri/Raft leader (can serve the control plane), else 503. Use it for load-balancer / k8s probes. |
+| `GET /ready` | **Data-plane** readiness — 200 if the core services that serve object traffic (the ring + local metadata store) are up, else 503. A node can serve/proxy objects even while the control plane is unavailable, so this is what to gate S3-traffic load balancers on. |
+| `GET /ready/cp` | **Control-plane** readiness — 200 only if a bounded, *leader-routed* Khepri probe actually commits (a reachable leader holds quorum). Catches a phantom leader or lost quorum that a cached leaderboard lookup would miss; gate control-plane-aware routing/monitoring on this. |
 | `GET /metrics` | Prometheus exposition. |
 | `GET /cluster` | Best-effort JSON snapshot of every node's view (leader, per-node membership + object counts). Fans out via `erpc`; marks unreachable peers, so a partition is visible at a glance. |
 

@@ -9,7 +9,7 @@ separately — see [Clustering](clustering.md).
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AETHER_PORT` | `9000` | S3 API listen port. |
-| `AETHER_ADMIN_PORT` | `9001` | Operational + admin-API port (`/health`, `/ready`, `/metrics`, `/cluster`, `/admin/*`). Firewall it. |
+| `AETHER_ADMIN_PORT` | `9001` | Operational + admin-API port (`/health`, `/ready`, `/ready/cp`, `/metrics`, `/cluster`, `/admin/*`). Firewall it. |
 | `AETHER_DATA_DIR` | `tmp/aether_data` | Where blobs, metadata, and the Khepri log live. One per node. |
 | `AETHER_LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warning`, `error`, …). Changeable live (below). |
 | `AETHER_REPLICATION_FACTOR` | `3` | Number of replicas per object. |
