@@ -80,7 +80,7 @@ membership is an operator concern.
 Dynamic identity and group management is served under `/admin` on the **admin
 port**, gated by a bootstrap bearer token (`AETHER_ADMIN_TOKEN`). With no token
 configured the API is disabled (every request is 401). The probe endpoints
-(`/health`, `/ready`, `/metrics`, `/cluster`) stay open. Writes go through the
+(`/health`, `/ready`, `/ready/cp`, `/metrics`, `/cluster`) stay open. Writes go through the
 control plane, so a user/key/group minted on one node exists cluster-wide.
 
 ```sh
