@@ -71,14 +71,26 @@ defmodule AetherS3.AuthorizationTest do
     assert req(:get, "/#{ctx.bucket}/o.txt", @root).status == 200
   end
 
-  test "public-read grants cross-user and anonymous reads, but not writes", ctx do
+  test "public-read grants object downloads, but not writes and not listing", ctx do
     seed_object(ctx)
     Store.set_bucket_acl(ctx.bucket, "public-read")
 
+    # object downloads (:get) are allowed for anyone
     assert anon(:get, "/#{ctx.bucket}/o.txt").status == 200
     assert req(:get, "/#{ctx.bucket}/o.txt", ctx.bob).status == 200
+    # but writes and *listing the bucket index* (:list) are not
     assert req(:put, "/#{ctx.bucket}/x.txt", ctx.bob, body: "x").status == 403
     assert anon(:put, "/#{ctx.bucket}/x.txt", body: "x").status == 403
+    assert anon(:get, "/#{ctx.bucket}").status == 403
+    assert req(:get, "/#{ctx.bucket}", ctx.bob).status == 403
+  end
+
+  test "a :list grant exposes the bucket index without granting downloads", ctx do
+    seed_object(ctx)
+    Store.set_bucket_grants(ctx.bucket, [%{grantee: :everyone, permission: :list}])
+
+    assert anon(:get, "/#{ctx.bucket}").status == 200
+    assert anon(:get, "/#{ctx.bucket}/o.txt").status == 403
   end
 
   test "public-read-write grants cross-user and anonymous object writes", ctx do
@@ -102,8 +114,8 @@ defmodule AetherS3.AuthorizationTest do
     assert req(:put, "/#{ctx.bucket}", ctx.alice, headers: [{"x-amz-acl", "public-read"}]).status ==
              200
 
-    # canned public-read is now sugar for an :everyone read grant
-    assert %{grants: [%{grantee: :everyone, permission: :read}]} = Store.get_bucket(ctx.bucket)
+    # canned public-read is now sugar for an :everyone :get grant (download only)
+    assert %{grants: [%{grantee: :everyone, permission: :get}]} = Store.get_bucket(ctx.bucket)
   end
 
   test "a nonexistent bucket is 404, not 403 (no existence leak)", ctx do

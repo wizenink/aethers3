@@ -47,15 +47,20 @@ Grants are `{grantee, permission}`:
 
 | Grantee | Permission | Covers |
 | --- | --- | --- |
-| `{:user, name}` / `{:group, name}` / `:everyone` | `:read` | GET / HEAD / list |
+| `{:user, name}` / `{:group, name}` / `:everyone` | `:list` | list / HEAD the **bucket** |
+| | `:get` | download / HEAD an **object** |
 | | `:write` | object PUT / POST / DELETE |
-| | `:full` | both |
+| | `:full` | all three |
 
-Bucket **create** requires an authenticated identity (no owner exists yet);
-bucket **delete** is owner/admin-only and is never granted by an ACL.
+`:list` and `:get` are deliberately separate: a public bucket can serve object
+downloads **without** exposing its index. Bucket **create** requires an
+authenticated identity (no owner exists yet); bucket **delete** is owner/admin-only
+and is never granted by an ACL.
 
-**Canned ACLs** are sugar over grants: `public-read` = an `:everyone` read grant,
-`public-read-write` = an `:everyone` full grant, `private` = no grants.
+**Canned ACLs** are sugar over grants: `public-read` = an `:everyone` **`:get`**
+grant (downloads only, *not* listing — this diverges from S3 on purpose to avoid
+leaking the index), `public-read-write` = `:everyone` `:get` + `:write`,
+`private` = no grants. To expose a public index, grant `:list` explicitly.
 
 ### Setting grants (S3 API)
 
