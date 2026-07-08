@@ -6,22 +6,30 @@ defmodule AetherS3.Auth.Grants do
   extensions) rather than being a throwaway.
 
       grantee    :: {:user, name} | {:group, name} | :everyone
-      permission :: :read | :write | :full
+      permission :: :list | :get | :write | :full
 
-  `:read` covers GET/HEAD/list, `:write` covers object PUT/POST/DELETE, `:full`
-  covers both. Ownership/admin and bucket-level create/delete are decided by the
-  Authorize plug BEFORE consulting grants — this module only answers "do the
-  bucket's grants allow this operation for this caller?".
+  `:list` covers listing/HEAD-ing a bucket, `:get` covers downloading/HEAD-ing an
+  object, `:write` covers object PUT/POST/DELETE, `:full` covers all three.
+  Splitting list from get is deliberate: a `public-read` bucket exposes object
+  downloads (`:get`) without exposing its index (`:list`). A legacy `:read`
+  permission (from before the split) is still honored as list + get.
+
+  Ownership/admin and bucket-level create/delete are decided by the Authorize plug
+  BEFORE consulting grants — this module only answers "do the bucket's grants
+  allow this operation for this caller?".
   """
 
   @type grantee :: {:user, String.t()} | {:group, String.t()} | :everyone
-  @type permission :: :read | :write | :full
+  @type permission :: :list | :get | :write | :full
   @type grant :: %{grantee: grantee, permission: permission}
 
   @doc "Does a held permission cover the one an operation requires?"
-  @spec covers?(permission, permission) :: boolean
+  @spec covers?(permission | :read, permission) :: boolean
   def covers?(:full, _), do: true
-  def covers?(:read, :read), do: true
+  def covers?(:read, :list), do: true
+  def covers?(:read, :get), do: true
+  def covers?(:list, :list), do: true
+  def covers?(:get, :get), do: true
   def covers?(:write, :write), do: true
   def covers?(_, _), do: false
 
@@ -52,7 +60,10 @@ defmodule AetherS3.Auth.Grants do
 
   @doc "Translate a canned ACL name into equivalent grants (sugar over :everyone)."
   @spec canned(String.t()) :: [grant]
-  def canned("public-read"), do: [%{grantee: :everyone, permission: :read}]
-  def canned("public-read-write"), do: [%{grantee: :everyone, permission: :full}]
+  def canned("public-read"), do: [%{grantee: :everyone, permission: :get}]
+
+  def canned("public-read-write"),
+    do: [%{grantee: :everyone, permission: :get}, %{grantee: :everyone, permission: :write}]
+
   def canned(_), do: []
 end

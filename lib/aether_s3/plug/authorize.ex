@@ -6,10 +6,10 @@ defmodule AetherS3.Plug.Authorize do
 
     * admin identity -> allow anything
     * bucket owner   -> allow anything on that bucket
-    * otherwise, the bucket's grants must allow the operation's permission
-      (`:read` for GET/HEAD, `:write` for object PUT/POST/DELETE) for one of the
-      caller's principals: their user, any group they belong to, or `:everyone`
-      (see `AetherS3.Auth.Grants`).
+    * otherwise, the bucket's grants must allow the operation's permission for one
+      of the caller's principals (their user, any group they belong to, or
+      `:everyone`): `:list` to list/HEAD the bucket, `:get` to download/HEAD an
+      object, `:write` for object PUT/POST/DELETE (see `AetherS3.Auth.Grants`).
 
   Anonymous is simply an identity with no user (its principals are just
   `:everyone`), so it can only do what an `:everyone` grant permits. Canned ACLs
@@ -63,7 +63,9 @@ defmodule AetherS3.Plug.Authorize do
         true
 
       method in ["GET", "HEAD"] ->
-        read_allowed?(identity, bucket)
+        # Listing / HEAD-ing the bucket is the :list permission (not :get, so a
+        # public-read bucket doesn't leak its index).
+        granted?(identity, bucket, :list)
 
       method == "PUT" ->
         # New name -> creating: any authenticated identity may. Existing name ->
@@ -84,14 +86,11 @@ defmodule AetherS3.Plug.Authorize do
   defp object_op(identity, bucket, method) do
     cond do
       admin?(identity) -> true
-      method in ["GET", "HEAD"] -> read_allowed?(identity, bucket)
-      method in ["PUT", "POST", "DELETE"] -> write_allowed?(identity, bucket)
+      method in ["GET", "HEAD"] -> granted?(identity, bucket, :get)
+      method in ["PUT", "POST", "DELETE"] -> granted?(identity, bucket, :write)
       true -> false
     end
   end
-
-  defp read_allowed?(identity, bucket), do: granted?(identity, bucket, :read)
-  defp write_allowed?(identity, bucket), do: granted?(identity, bucket, :write)
 
   defp granted?(identity, bucket, required) do
     case ControlPlane.get_bucket(bucket) do

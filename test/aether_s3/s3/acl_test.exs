@@ -30,7 +30,7 @@ defmodule AetherS3.S3.AclTest do
     grants =
       Acl.grants(getter(%{"x-amz-acl" => ["public-read"], "x-amz-grant-read" => [~s(id="bob")]}))
 
-    assert grants == [%{grantee: :everyone, permission: :read}]
+    assert grants == [%{grantee: :everyone, permission: :get}]
   end
 
   test "no ACL headers yields no grants" do
