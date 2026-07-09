@@ -15,6 +15,7 @@ services:
       AETHER_DATA_DIR: /data
       AETHER_PORT: "9000"
       AETHER_WRITE_QUORUM: "${AETHER_WRITE_QUORUM:-1}"
+      AETHER_REPLICATION_FACTOR: "${AETHER_REPLICATION_FACTOR:-3}"
     networks:
       - aether
     # Object API on 9000; epmd 4369 + pinned dist port 9100-9110 stay internal.

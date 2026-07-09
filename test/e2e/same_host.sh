@@ -133,6 +133,20 @@ fi
 
 # --- list from node 2 ---
 log "LIST from node 2..."
-awsn 2 s3 ls s3://e2e/ | grep -q "small.txt" || fail "list missing small.txt"
+listing="$(awsn 2 s3 ls s3://e2e/)"
+grep -q "small.txt" <<<"$listing" || fail "list missing small.txt"
+
+# --- LIST prefix + delimiter (ListObjectsV2 path) ---
+log "LIST with prefix + delimiter from node 2..."
+awsn 0 s3 cp "$WORKDIR/small.txt" s3://e2e/logs/a.txt >/dev/null
+awsn 0 s3 cp "$WORKDIR/small.txt" s3://e2e/logs/b.txt >/dev/null
+# a top-level ls uses delimiter "/" -> the logs/ subtree collapses to a common prefix
+listing="$(awsn 2 s3 ls s3://e2e/)"
+grep -q "PRE logs/" <<<"$listing" || fail "list delimiter missing common prefix logs/"
+# a prefixed ls narrows to that subtree
+prefixed="$(awsn 2 s3 ls s3://e2e/logs/)"
+grep -q "a.txt" <<<"$prefixed" || fail "prefix list missing logs/a.txt"
+grep -q "b.txt" <<<"$prefixed" || fail "prefix list missing logs/b.txt"
+if grep -q "small.txt" <<<"$prefixed"; then fail "prefix list leaked a non-matching key"; fi
 
 log "PASS: same-host multi-node e2e"

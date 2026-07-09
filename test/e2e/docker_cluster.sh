@@ -111,7 +111,10 @@ if awsd "$IP3" s3api head-object --bucket e2e --key big.bin >/dev/null 2>&1; the
 fi
 
 # --- list from node 3 ---
+# Capture then grep a here-string: under `set -o pipefail`, `aws | grep -q` lets a
+# match close the pipe early and SIGPIPE aws (exit 141), failing the pipeline.
 log "LIST from node 3..."
-awsd "$IP3" s3 ls s3://e2e/ | grep -q "small.txt" || fail "list missing small.txt"
+listing="$(awsd "$IP3" s3 ls s3://e2e/)"
+grep -q "small.txt" <<<"$listing" || fail "list missing small.txt"
 
 log "PASS: docker cluster e2e"
