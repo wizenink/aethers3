@@ -1,11 +1,10 @@
-defmodule AetherS3.MixProject do
+defmodule AetherS3.Umbrella.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :aether_s3,
+      apps_path: "apps",
       version: "0.4.0",
-      elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
@@ -13,9 +12,12 @@ defmodule AetherS3.MixProject do
     ]
   end
 
+  # Each app builds its own release, with an explicit application list so a release
+  # bundles ONLY its app (+ deps) — the storage node never pulls in the console.
   defp releases do
     [
       aether_s3: [
+        applications: [aether_s3: :permanent],
         steps: release_steps(),
         burrito: [
           targets: [
@@ -38,11 +40,11 @@ defmodule AetherS3.MixProject do
     end
   end
 
-  # `mix rel` builds the release, working around a bug in khepri's `horus` dep
-  # (horus 0.4.0 lists :erts in its .app `applications`, which `mix release`
+  # `mix rel` builds the aether_s3 release, working around a bug in khepri's `horus`
+  # dep (horus 0.4.0 lists :erts in its .app `applications`, which `mix release`
   # can't bundle). We compile first, strip the bogus :erts entry, then assemble.
   defp aliases do
-    [rel: ["compile", &patch_horus/1, "release --overwrite"]]
+    [rel: ["compile", &patch_horus/1, "release aether_s3 --overwrite"]]
   end
 
   defp patch_horus(_args) do
@@ -53,32 +55,13 @@ defmodule AetherS3.MixProject do
     end
   end
 
-  # Run "mix help compile.app" to learn about applications.
-  def application do
-    [
-      mod: {AetherS3.Application, []},
-      extra_applications: [:logger]
-    ]
-  end
-
-  # Run "mix help deps" to learn about dependencies.
+  # Umbrella-level deps: release tooling only. App runtime deps live in each
+  # apps/*/mix.exs.
   defp deps do
-    base = [
-      {:bandit, "~> 1.12"},
-      {:plug, "~> 1.20"},
-      {:cubdb, "~> 2.0"},
-      {:saxy, "~> 1.6"},
-      {:khepri, "~> 0.18.0"},
-      {:libcluster, "~> 3.5"},
-      {:toml, "~> 0.7"},
-      {:telemetry_metrics_prometheus_core, "~> 1.1"},
-      {:telemetry_poller, "~> 1.1"}
-    ]
-
     if System.get_env("BURRITO_BUILD") == "1" do
-      base ++ [{:burrito, "~> 1.5", runtime: false}]
+      [{:burrito, "~> 1.5", runtime: false}]
     else
-      base
+      []
     end
   end
 end

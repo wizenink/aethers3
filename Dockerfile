@@ -11,12 +11,15 @@ WORKDIR /src
 RUN apt-get update -y && apt-get install -y --no-install-recommends ca-certificates git \
   && rm -rf /var/lib/apt/lists/*
 RUN mix local.hex --force && mix local.rebar --force
+# Umbrella: root mix.exs + each app's mix.exs are needed to resolve deps.
 COPY mix.exs mix.lock ./
+COPY apps/aether_s3/mix.exs apps/aether_s3/mix.exs
 RUN mix deps.get --only prod
 COPY config config
 COPY rel rel
-COPY lib lib
-# `mix rel` = compile + patch horus's :erts bug + assemble (see mix.exs aliases)
+COPY apps apps
+# `mix rel` = compile + patch horus's :erts bug + assemble the aether_s3 release
+# (see the umbrella-root mix.exs aliases)
 RUN mix rel
 
 # ---- runtime ----

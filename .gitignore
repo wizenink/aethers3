@@ -13,6 +13,12 @@
 # Temporary files, for example, from tests.
 /tmp/
 
+# Umbrella: Mix runs each app's tasks from the app dir, so per-app artifacts
+# (test data dirs, coverage, generated docs) land under apps/*/.
+apps/*/tmp/
+apps/*/cover/
+apps/*/doc/
+
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
 
