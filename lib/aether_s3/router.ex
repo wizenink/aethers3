@@ -5,6 +5,7 @@ defmodule AetherS3.Router do
   alias AetherS3.Storage.Streamer
   alias AetherS3.S3.XML
   alias AetherS3.S3.Acl
+  alias AetherS3.S3.ListObjects
   alias AetherS3.Auth.Grants
   alias AetherS3.ControlPlane.Store, as: ControlPlane
   alias AetherS3.Storage.Multipart
@@ -59,11 +60,57 @@ defmodule AetherS3.Router do
         acl_xml(conn, bucket, scope)
 
       true ->
-        objects = Coordinator.list(bucket)
+        render_list(conn, bucket)
+    end
+  end
 
-        conn
-        |> put_resp_content_type("application/xml")
-        |> send_resp(200, XML.list_bucket(bucket, objects))
+  defp render_list(conn, bucket) do
+    qp = conn.query_params
+    result = ListObjects.paginate(Coordinator.list(bucket), list_opts(qp))
+
+    body =
+      if qp["list-type"] == "2",
+        do: XML.list_objects_v2(bucket, result),
+        else: XML.list_objects_v1(bucket, result)
+
+    conn
+    |> put_resp_content_type("application/xml")
+    |> send_resp(200, body)
+  end
+
+  # Translate S3 LIST query params into ListObjects options. v2 resumes from
+  # continuation-token (opaque) or start-after; v1 resumes from marker.
+  defp list_opts(qp) do
+    after_key =
+      cond do
+        qp["list-type"] == "2" and qp["continuation-token"] ->
+          ListObjects.decode_token(qp["continuation-token"])
+
+        qp["list-type"] == "2" ->
+          qp["start-after"]
+
+        true ->
+          qp["marker"]
+      end
+
+    [
+      prefix: qp["prefix"] || "",
+      delimiter: presence(qp["delimiter"]),
+      max_keys: parse_int(qp["max-keys"]),
+      after: after_key
+    ]
+  end
+
+  defp presence(nil), do: nil
+  defp presence(""), do: nil
+  defp presence(v), do: v
+
+  defp parse_int(nil), do: nil
+
+  defp parse_int(s) do
+    case Integer.parse(s) do
+      {n, _rest} -> n
+      :error -> nil
     end
   end
 

@@ -41,6 +41,45 @@ defmodule AetherS3.RouterTest do
     assert call(conn(:get, "/#{bucket}/hello.txt")).status == 404
   end
 
+  test "LIST v2: prefix, delimiter, and continuation-token pagination", %{bucket: bucket} do
+    call(conn(:put, "/#{bucket}"))
+
+    for k <- ["a.txt", "docs/1.txt", "photos/cat.jpg", "photos/dog.jpg", "z.txt"],
+        do: text_put("/#{bucket}/#{k}", "x")
+
+    # delimiter groups nested keys into CommonPrefixes; top-level files stay Contents
+    lvl = call(conn(:get, "/#{bucket}?list-type=2&delimiter=/"))
+    assert lvl.status == 200
+    assert lvl.resp_body =~ "<Key>a.txt</Key>"
+    assert lvl.resp_body =~ "<Key>z.txt</Key>"
+    assert lvl.resp_body =~ "<CommonPrefixes><Prefix>docs/</Prefix></CommonPrefixes>"
+    assert lvl.resp_body =~ "<CommonPrefixes><Prefix>photos/</Prefix></CommonPrefixes>"
+    refute lvl.resp_body =~ "<Key>photos/cat.jpg</Key>"
+
+    # prefix narrows to a subtree
+    sub = call(conn(:get, "/#{bucket}?list-type=2&prefix=photos/"))
+    assert sub.resp_body =~ "<Key>photos/cat.jpg</Key>"
+    assert sub.resp_body =~ "<Key>photos/dog.jpg</Key>"
+    refute sub.resp_body =~ "<Key>a.txt</Key>"
+
+    # pagination: first page truncates and hands back a token
+    p1 = call(conn(:get, "/#{bucket}?list-type=2&max-keys=2"))
+    assert p1.resp_body =~ "<IsTruncated>true</IsTruncated>"
+    assert p1.resp_body =~ "<Key>a.txt</Key>"
+    assert p1.resp_body =~ "<Key>docs/1.txt</Key>"
+    token = p1.resp_body |> extract("NextContinuationToken")
+
+    # second page resumes after the token and finishes the listing
+    p2 = call(conn(:get, "/#{bucket}?list-type=2&max-keys=2&continuation-token=#{token}"))
+    assert p2.resp_body =~ "<Key>photos/cat.jpg</Key>"
+    refute p2.resp_body =~ "<Key>a.txt</Key>"
+  end
+
+  defp extract(xml, tag) do
+    [_, value] = Regex.run(~r|<#{tag}>([^<]+)</#{tag}>|, xml)
+    value
+  end
+
   test "GET on a missing key returns 404 NoSuchKey", %{bucket: bucket} do
     call(conn(:put, "/#{bucket}"))
     resp = call(conn(:get, "/#{bucket}/ghost.txt"))
