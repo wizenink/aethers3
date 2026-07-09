@@ -6,6 +6,8 @@ defmodule AetherS3.ControlPlane do
               :ok | {:error, :no_such_bucket}
   @callback set_bucket_acl(name :: String.t(), acl :: String.t()) ::
               :ok | {:error, :no_such_bucket}
+  @callback set_scoped_grants(name :: String.t(), scope :: String.t(), grants :: [map()]) ::
+              :ok | {:error, :no_such_bucket}
   @callback delete_bucket(name :: String.t()) :: :ok | {:error, :not_empty}
 
   @callback put_group(name :: String.t(), members :: [String.t()]) :: :ok

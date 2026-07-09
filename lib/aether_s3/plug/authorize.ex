@@ -51,9 +51,15 @@ defmodule AetherS3.Plug.Authorize do
     identity = conn.assigns[:identity]
 
     case conn.path_info do
-      [] -> true
-      [bucket] -> bucket_op(identity, bucket, conn.method)
-      [bucket | _key] -> object_op(identity, bucket, conn.method)
+      [] ->
+        true
+
+      [bucket] ->
+        bucket_op(identity, bucket, conn.method)
+
+      [bucket | key] ->
+        acl? = Map.has_key?(fetch_query_params(conn).query_params, "acl")
+        object_op(identity, bucket, Enum.join(key, "/"), conn.method, acl?)
     end
   end
 
@@ -64,8 +70,9 @@ defmodule AetherS3.Plug.Authorize do
 
       method in ["GET", "HEAD"] ->
         # Listing / HEAD-ing the bucket is the :list permission (not :get, so a
-        # public-read bucket doesn't leak its index).
-        granted?(identity, bucket, :list)
+        # public-read bucket doesn't leak its index). Bucket-wide grants only —
+        # scoped grants are object-level and never grant listing.
+        granted_bucket?(identity, bucket, :list)
 
       method == "PUT" ->
         # New name -> creating: any authenticated identity may. Existing name ->
@@ -83,18 +90,32 @@ defmodule AetherS3.Plug.Authorize do
     end
   end
 
-  defp object_op(identity, bucket, method) do
+  defp object_op(identity, bucket, key, method, acl?) do
     cond do
       admin?(identity) -> true
-      method in ["GET", "HEAD"] -> granted?(identity, bucket, :get)
-      method in ["PUT", "POST", "DELETE"] -> granted?(identity, bucket, :write)
+      # Reading/setting an object or prefix ACL is managing sharing -> owner/admin only.
+      acl? -> owner_only?(identity, bucket)
+      method in ["GET", "HEAD"] -> granted?(identity, bucket, key, :get)
+      method in ["PUT", "POST", "DELETE"] -> granted?(identity, bucket, key, :write)
       true -> false
     end
   end
 
-  defp granted?(identity, bucket, required) do
+  defp granted?(identity, bucket, key, required) do
     case ControlPlane.get_bucket(bucket) do
       # missing bucket: let the router answer 404, not 403
+      nil ->
+        true
+
+      record ->
+        owner?(identity, record) or
+          Grants.allows_for_key?(record, principals(identity), key, required)
+    end
+  end
+
+  # Bucket-level permission (listing) — bucket-wide grants only, no scoped grants.
+  defp granted_bucket?(identity, bucket, required) do
+    case ControlPlane.get_bucket(bucket) do
       nil ->
         true
 

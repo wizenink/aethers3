@@ -4,6 +4,8 @@ defmodule AetherS3.Router do
   alias AetherS3.Storage.BlobStore
   alias AetherS3.Storage.Streamer
   alias AetherS3.S3.XML
+  alias AetherS3.S3.Acl
+  alias AetherS3.Auth.Grants
   alias AetherS3.ControlPlane.Store, as: ControlPlane
   alias AetherS3.Storage.Multipart
   alias AetherS3.Replication.Coordinator
@@ -19,22 +21,16 @@ defmodule AetherS3.Router do
     bucket = conn.params["bucket"]
 
     if Map.has_key?(conn.query_params, "acl") do
-      # Set the bucket's grants (owner/admin only — enforced by the Authorize
-      # plug, which treats PUT on an existing bucket as owner-only).
-      case ControlPlane.set_bucket_grants(bucket, acl_grants(conn)) do
-        :ok ->
-          send_resp(conn, 200, "")
+      # Set grants (owner/admin only — enforced by the Authorize plug, which treats
+      # PUT on an existing bucket as owner-only). A `prefix` param scopes the grants
+      # to a key prefix; otherwise they apply bucket-wide.
+      result =
+        case conn.query_params["prefix"] do
+          nil -> ControlPlane.set_bucket_grants(bucket, acl_grants(conn))
+          raw -> ControlPlane.set_scoped_grants(bucket, normalize_prefix(raw), acl_grants(conn))
+        end
 
-        {:error, :no_such_bucket} ->
-          send_xml(
-            conn,
-            404,
-            XML.error("NoSuchBucket", "The specified bucket does not exist.", conn.request_path)
-          )
-
-        {:error, :unavailable} ->
-          unavailable(conn)
-      end
+      respond_set_grants(conn, result)
     else
       case ControlPlane.create_bucket(bucket, owner_of(conn.assigns[:identity])) do
         :ok ->
@@ -53,12 +49,22 @@ defmodule AetherS3.Router do
   end
 
   get "/:bucket" do
+    conn = fetch_query_params(conn)
     bucket = conn.params["bucket"]
-    objects = Coordinator.list(bucket)
 
-    conn
-    |> put_resp_content_type("application/xml")
-    |> send_resp(200, XML.list_bucket(bucket, objects))
+    cond do
+      Map.has_key?(conn.query_params, "acl") ->
+        # Read grants back: a `prefix` param reads that scoped ACL, else bucket-wide.
+        scope = conn.query_params["prefix"] && normalize_prefix(conn.query_params["prefix"])
+        acl_xml(conn, bucket, scope)
+
+      true ->
+        objects = Coordinator.list(bucket)
+
+        conn
+        |> put_resp_content_type("application/xml")
+        |> send_resp(200, XML.list_bucket(bucket, objects))
+    end
   end
 
   head "/:bucket" do
@@ -82,8 +88,19 @@ defmodule AetherS3.Router do
   end
 
   get "/:bucket/*key" do
+    conn = fetch_query_params(conn)
     bucket = conn.params["bucket"]
     key = Enum.join(conn.params["key"], "/")
+
+    if Map.has_key?(conn.query_params, "acl") do
+      # Read this object's ACL (scope = exact key).
+      acl_xml(conn, bucket, key)
+    else
+      get_object(conn, bucket, key)
+    end
+  end
+
+  defp get_object(conn, bucket, key) do
     range = conn |> get_req_header("range") |> List.first()
 
     case Coordinator.locate_repair(bucket, key) do
@@ -192,6 +209,18 @@ defmodule AetherS3.Router do
     bucket = conn.params["bucket"]
     key = Enum.join(conn.params["key"], "/")
 
+    cond do
+      Map.has_key?(conn.query_params, "acl") ->
+        # Per-object ACL: scope the grants to this exact key (owner/admin only, via
+        # the Authorize plug). x-amz-acl: private clears it (empty grants).
+        respond_set_grants(conn, ControlPlane.set_scoped_grants(bucket, key, acl_grants(conn)))
+
+      true ->
+        put_object(conn, bucket, key)
+    end
+  end
+
+  defp put_object(conn, bucket, key) do
     case conn.query_params do
       %{"partNumber" => pn, "uploadId" => upload_id} ->
         part_number = String.to_integer(pn)
@@ -302,7 +331,55 @@ defmodule AetherS3.Router do
   defp owner_of(_), do: nil
 
   # Grants requested via ACL headers (x-amz-acl canned, or x-amz-grant-*).
-  defp acl_grants(conn), do: AetherS3.S3.Acl.grants(&get_req_header(conn, &1))
+  defp acl_grants(conn), do: Acl.grants(&get_req_header(conn, &1))
+
+  # Common response for a set-grants call (bucket-wide or scoped).
+  defp respond_set_grants(conn, :ok), do: send_resp(conn, 200, "")
+
+  defp respond_set_grants(conn, {:error, :no_such_bucket}) do
+    send_xml(
+      conn,
+      404,
+      XML.error("NoSuchBucket", "The specified bucket does not exist.", conn.request_path)
+    )
+  end
+
+  defp respond_set_grants(conn, {:error, :unavailable}), do: unavailable(conn)
+
+  # A `prefix` ACL param carries prefix semantics; ensure the stored scope reflects
+  # that (a trailing `*`) so Grants.scope_matches? treats it as a prefix, not exact.
+  defp normalize_prefix(prefix) do
+    if String.ends_with?(prefix, "*"), do: prefix, else: prefix <> "*"
+  end
+
+  # Serialize a bucket's grants (bucket-wide when scope is nil, else the entry for
+  # that scope) as an S3 AccessControlPolicy document.
+  defp acl_xml(conn, bucket, scope) do
+    case ControlPlane.get_bucket(bucket) do
+      nil ->
+        send_xml(
+          conn,
+          404,
+          XML.error("NoSuchBucket", "The specified bucket does not exist.", conn.request_path)
+        )
+
+      record ->
+        grants =
+          case scope do
+            nil -> Grants.of(record)
+            s -> grants_for_scope(record, s)
+          end
+
+        send_xml(conn, 200, Acl.to_xml(record.owner, grants))
+    end
+  end
+
+  defp grants_for_scope(record, scope) do
+    case Enum.find(Grants.scoped(record), &(&1.scope == scope)) do
+      %{grants: grants} -> grants
+      nil -> []
+    end
+  end
 
   # The control plane couldn't commit (no reachable Raft leader) — fail fast.
   defp unavailable(conn) do

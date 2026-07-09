@@ -52,11 +52,40 @@ defmodule AetherS3.Auth.Grants do
     end)
   end
 
+  @doc """
+  Does the bucket allow `required` for `key`? Bucket-wide grants apply to every
+  key; a scoped grant applies only to keys its `scope` matches. Allowed if either
+  path permits it for one of the caller's `principals`.
+  """
+  @spec allows_for_key?(map(), MapSet.t(grantee), String.t(), permission) :: boolean
+  def allows_for_key?(record, principals, key, required) do
+    allows?(of(record), principals, required) or
+      Enum.any?(scoped(record), fn %{scope: scope, grants: grants} ->
+        scope_matches?(scope, key) and allows?(grants, principals, required)
+      end)
+  end
+
+  @doc "Does `scope` cover `key`? `*` = any key; a trailing `*` = prefix; else exact."
+  @spec scope_matches?(String.t(), String.t()) :: boolean
+  def scope_matches?("*", _key), do: true
+
+  def scope_matches?(scope, key) do
+    if String.ends_with?(scope, "*") do
+      String.starts_with?(key, String.trim_trailing(scope, "*"))
+    else
+      key == scope
+    end
+  end
+
   @doc "A bucket record's grants, translating a legacy canned `:acl` if present."
   @spec of(map()) :: [grant]
   def of(%{grants: grants}) when is_list(grants), do: grants
   def of(%{acl: acl}), do: canned(acl)
   def of(_), do: []
+
+  @doc "A bucket record's scoped (per key/prefix) grant entries, `[]` if none."
+  @spec scoped(map()) :: [%{scope: String.t(), grants: [grant]}]
+  def scoped(record), do: Map.get(record, :scoped_grants) || []
 
   @doc "Translate a canned ACL name into equivalent grants (sugar over :everyone)."
   @spec canned(String.t()) :: [grant]

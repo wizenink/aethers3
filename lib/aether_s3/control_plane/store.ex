@@ -11,7 +11,12 @@ defmodule AetherS3.ControlPlane.Store do
 
   @impl AetherS3.ControlPlane
   def create_bucket(name, owner) do
-    cp_put([:buckets, name], %{created_at: DateTime.utc_now(), owner: owner, grants: []})
+    cp_put([:buckets, name], %{
+      created_at: DateTime.utc_now(),
+      owner: owner,
+      grants: [],
+      scoped_grants: []
+    })
   end
 
   @impl AetherS3.ControlPlane
@@ -33,6 +38,32 @@ defmodule AetherS3.ControlPlane.Store do
   @impl AetherS3.ControlPlane
   def set_bucket_acl(name, acl) do
     set_bucket_grants(name, Grants.canned(acl))
+  end
+
+  @impl AetherS3.ControlPlane
+  def set_scoped_grants(name, scope, grants) do
+    case get_bucket(name) do
+      nil ->
+        {:error, :no_such_bucket}
+
+      record ->
+        scoped = put_scope(Grants.scoped(record), scope, grants)
+        cp_put([:buckets, name], Map.put(record, :scoped_grants, scoped))
+    end
+  end
+
+  # Upsert a scope's grants: replace an existing entry, append a new one, or (when
+  # `grants` is empty — e.g. canned "private") drop the scope entirely.
+  defp put_scope(scoped, scope, []), do: Enum.reject(scoped, &(&1.scope == scope))
+
+  defp put_scope(scoped, scope, grants) do
+    entry = %{scope: scope, grants: grants}
+
+    if Enum.any?(scoped, &(&1.scope == scope)) do
+      Enum.map(scoped, fn e -> if e.scope == scope, do: entry, else: e end)
+    else
+      [entry | scoped]
+    end
   end
 
   @impl AetherS3.ControlPlane

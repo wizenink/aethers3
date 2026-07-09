@@ -80,6 +80,30 @@ curl -X PUT "https://host/b?acl" \
 Groups themselves (who belongs to them) are defined via the admin API, since
 membership is an operator concern.
 
+### Object & prefix grants
+
+Grants can be scoped to a single object or a key prefix, not just the whole
+bucket. Bucket-wide grants and scoped grants are **additive** — a request is
+allowed if either permits it.
+
+```sh
+# share one object (scope = the exact key)
+aws s3api put-object-acl --bucket b --key photos/cat.jpg --grant-read 'id=bob'
+
+# read an object's ACL back
+aws s3api get-object-acl --bucket b --key photos/cat.jpg
+
+# share a whole prefix (a non-standard extension: ?acl&prefix=)
+curl -X PUT "https://host/b?acl&prefix=photos/" \
+  -H 'x-amz-grant-read: id="bob"'   # (signed) -> everything under photos/
+```
+
+A scope matches a key exactly, unless it ends in `*` (a prefix); `*` alone is the
+whole bucket. The `?acl&prefix=P` surface stores `P*`, so it always matches by
+prefix. Setting `x-amz-acl: private` (empty grants) on an object clears its ACL.
+Managing an object/prefix ACL (`PUT`/`GET ?acl`) is owner/admin-only — bucket
+listing is never granted by a scoped grant (it stays a bucket-wide `:list`).
+
 ## Admin API
 
 Dynamic identity and group management is served under `/admin` on the **admin
@@ -142,4 +166,3 @@ it are answered 404, as if it doesn't exist.
   model is deliberately shaped as allow-statements so a policy engine is a future
   extension rather than a rewrite. Groups are flat (no nested groups).
 - **Encryption of object data at rest** (only key secrets are encrypted).
-- Presigned URLs; per-object ACLs.

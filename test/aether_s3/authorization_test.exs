@@ -93,6 +93,78 @@ defmodule AetherS3.AuthorizationTest do
     assert anon(:get, "/#{ctx.bucket}/o.txt").status == 403
   end
 
+  test "owner shares a single object via PUT /bucket/key?acl", ctx do
+    seed_object(ctx)
+    assert req(:put, "/#{ctx.bucket}/p.txt", ctx.alice, body: "sibling").status == 200
+    assert req(:get, "/#{ctx.bucket}/o.txt", ctx.bob).status == 403
+
+    grant =
+      req(:put, "/#{ctx.bucket}/o.txt?acl", ctx.alice,
+        headers: [{"x-amz-grant-read", ~s(id="#{ctx.bob_user}")}]
+      )
+
+    assert grant.status == 200
+
+    # bob can read the granted object, but not a sibling, and still can't write it
+    assert req(:get, "/#{ctx.bucket}/o.txt", ctx.bob).status == 200
+    assert req(:get, "/#{ctx.bucket}/p.txt", ctx.bob).status == 403
+    assert req(:put, "/#{ctx.bucket}/o.txt", ctx.bob, body: "x").status == 403
+  end
+
+  test "x-amz-acl private on an object clears a prior object grant", ctx do
+    seed_object(ctx)
+
+    req(:put, "/#{ctx.bucket}/o.txt?acl", ctx.alice,
+      headers: [{"x-amz-grant-read", ~s(id="#{ctx.bob_user}")}]
+    )
+
+    assert req(:get, "/#{ctx.bucket}/o.txt", ctx.bob).status == 200
+
+    assert req(:put, "/#{ctx.bucket}/o.txt?acl", ctx.alice, headers: [{"x-amz-acl", "private"}]).status ==
+             200
+
+    assert req(:get, "/#{ctx.bucket}/o.txt", ctx.bob).status == 403
+  end
+
+  test "owner shares a prefix via PUT /bucket?acl&prefix=", ctx do
+    assert req(:put, "/#{ctx.bucket}", ctx.alice).status == 200
+    assert req(:put, "/#{ctx.bucket}/photos/cat.jpg", ctx.alice, body: "meow").status == 200
+    assert req(:put, "/#{ctx.bucket}/docs/secret.txt", ctx.alice, body: "shh").status == 200
+
+    assert req(:put, "/#{ctx.bucket}?acl&prefix=photos/", ctx.alice,
+             headers: [{"x-amz-grant-read", ~s(id="#{ctx.bob_user}")}]
+           ).status == 200
+
+    # bob sees the whole photos/ subtree, nothing outside it
+    assert req(:get, "/#{ctx.bucket}/photos/cat.jpg", ctx.bob).status == 200
+    assert req(:get, "/#{ctx.bucket}/docs/secret.txt", ctx.bob).status == 403
+  end
+
+  test "a non-owner cannot set an object ACL", ctx do
+    seed_object(ctx)
+
+    assert req(:put, "/#{ctx.bucket}/o.txt?acl", ctx.bob,
+             headers: [{"x-amz-grant-read", ~s(id="#{ctx.bob_user}")}]
+           ).status == 403
+  end
+
+  test "GET /bucket/key?acl returns the object's grants (owner only)", ctx do
+    seed_object(ctx)
+
+    req(:put, "/#{ctx.bucket}/o.txt?acl", ctx.alice,
+      headers: [{"x-amz-grant-read", ~s(id="#{ctx.bob_user}")}]
+    )
+
+    resp = req(:get, "/#{ctx.bucket}/o.txt?acl", ctx.alice)
+    assert resp.status == 200
+    assert resp.resp_body =~ "AccessControlPolicy"
+    assert resp.resp_body =~ ctx.bob_user
+    assert resp.resp_body =~ "READ"
+
+    # a stranger can't read the ACL
+    assert req(:get, "/#{ctx.bucket}/o.txt?acl", ctx.bob).status == 403
+  end
+
   test "public-read-write grants cross-user and anonymous object writes", ctx do
     assert req(:put, "/#{ctx.bucket}", ctx.alice).status == 200
     Store.set_bucket_acl(ctx.bucket, "public-read-write")

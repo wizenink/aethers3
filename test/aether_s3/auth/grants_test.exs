@@ -32,6 +32,48 @@ defmodule AetherS3.Auth.GrantsTest do
     assert MapSet.equal?(p, MapSet.new([:everyone]))
   end
 
+  test "scope_matches?/2 matches the scope to the correct keys" do
+    assert Grants.scope_matches?("photos/cat.jpg", "photos/cat.jpg")
+    refute Grants.scope_matches?("photos/cat.jpg", "photos/cat.jpg2")
+    assert Grants.scope_matches?("photos/*", "photos/a.jpg")
+    refute Grants.scope_matches?("photos/*", "docs/a.pdf")
+    assert Grants.scope_matches?("*", "anything")
+  end
+
+  test "allows_for_key?/4: bucket-wide grants apply to every key" do
+    record = %{grants: [%{grantee: :everyone, permission: :get}], scoped_grants: []}
+    anon = Grants.principals(:anonymous, [])
+    assert Grants.allows_for_key?(record, anon, "any/key", :get)
+    refute Grants.allows_for_key?(record, anon, "any/key", :write)
+  end
+
+  test "allows_for_key?/4: a scoped grant applies only to matching keys" do
+    record = %{
+      grants: [],
+      scoped_grants: [
+        %{scope: "photos/cat.jpg", grants: [%{grantee: {:user, "bob"}, permission: :get}]},
+        %{scope: "shared/*", grants: [%{grantee: {:user, "bob"}, permission: :write}]}
+      ]
+    }
+
+    bob = Grants.principals(%{user: "bob"}, [])
+
+    # exact-object grant: only that object
+    assert Grants.allows_for_key?(record, bob, "photos/cat.jpg", :get)
+    refute Grants.allows_for_key?(record, bob, "photos/dog.jpg", :get)
+
+    # prefix grant: the whole subtree, but only the granted permission
+    assert Grants.allows_for_key?(record, bob, "shared/a/b.txt", :write)
+    refute Grants.allows_for_key?(record, bob, "shared/a/b.txt", :get)
+    refute Grants.allows_for_key?(record, bob, "private/x", :write)
+  end
+
+  test "allows_for_key?/4: tolerates a record with no scoped_grants field" do
+    record = %{grants: [%{grantee: :everyone, permission: :get}]}
+    anon = Grants.principals(:anonymous, [])
+    assert Grants.allows_for_key?(record, anon, "k", :get)
+  end
+
   test "allows?/3 matches a grant to a principal + covers the permission" do
     grants = [
       %{grantee: {:user, "bob"}, permission: :get},
