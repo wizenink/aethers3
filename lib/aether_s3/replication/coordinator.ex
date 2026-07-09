@@ -189,12 +189,12 @@ defmodule AetherS3.Replication.Coordinator do
   end
 
   @doc """
-  Pure read-repair planning: given the replica order and each replica's meta
-  lookup result (`[{node, {:ok, meta} | :not_found}]`), return `:not_found` if no
-  replica has the object, else `{winner_node, winner_meta, repair_targets}` where
-  the winner is the causally-latest copy (version vectors; LWW tiebreak for true
-  conflicts) and targets are the replicas whose version the winner supersedes
-  (older, missing, or a concurrent loser).
+  Pure read-repair planning: given the replica order and each replica's meta lookup
+  result (`[{node, {:ok, meta} | :not_found | :error}]`), return `:not_found` if no
+  replica has the object, else `{winner_node, winner_meta, repair_targets}` where the
+  winner is the causally-latest copy (version vectors; LWW tiebreak for true conflicts)
+  and targets are the replicas we CONFIRMED lack it (reachable-but-absent, or holding a
+  version the winner supersedes). An `:error` replica (unreachable) is never a target.
   """
   def plan(replicas, results) do
     present = for {n, {:ok, m}} <- results, do: {n, m}
@@ -212,19 +212,27 @@ defmodule AetherS3.Replication.Coordinator do
         targets =
           for n <- replicas,
               n != winner_node,
-              Conflict.supersedes?(winner_meta, meta_at(n, results)),
+              repairable?(winner_meta, result_at(n, results)),
               do: n
 
         {winner_node, winner_meta, targets}
     end
   end
 
-  defp meta_at(node, results) do
+  defp result_at(node, results) do
     case List.keyfind(results, node, 0) do
-      {_, {:ok, m}} -> m
-      _ -> nil
+      {_, r} -> r
+      _ -> :error
     end
   end
+
+  # A replica is a repair target only if we CONFIRMED it lacks the winner: reachable
+  # but absent (:not_found), or holding a version the winner supersedes. An unreachable
+  # replica (:error) is left alone — repairing on an unknown state could clobber a copy
+  # that is actually newer than ours.
+  defp repairable?(_winner_meta, :not_found), do: true
+  defp repairable?(_winner_meta, :error), do: false
+  defp repairable?(winner_meta, {:ok, m}), do: Conflict.supersedes?(winner_meta, m)
 
   # Manifest winner has no blob — repair its meta only (we hold it here).
   defp repair_one(_winner, target, bucket, key, %{parts: _} = meta) do
@@ -331,7 +339,9 @@ defmodule AetherS3.Replication.Coordinator do
   defp get_meta_from(node, bucket, key) do
     :erpc.call(node, AetherS3.ObjectMeta.Store, :get, [bucket, key])
   rescue
-    _ -> :not_found
+    # Unreachable / RPC failure — state UNKNOWN, distinct from a reachable :not_found.
+    # Read-repair must not treat "unknown" as "absent" and push over a newer copy.
+    _ -> :error
   end
 
   @doc """

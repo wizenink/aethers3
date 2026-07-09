@@ -158,20 +158,27 @@ for _ in $(seq 1 40); do
 done
 awsd "$MIN_IP" s3api head-bucket --bucket majonly >/dev/null 2>&1 || fail "minority did not resync the control plane (majonly missing)"
 
-# Theory 2 recovery: the divergent same-key writes CONVERGE — both sides must
-# settle on the SAME value (this is the deterministic guarantee; every node runs
-# the identical tiebreak). WHICH write wins is best-effort last-writer-wins by wall
-# clock and can mispick across nodes, so we assert agreement (both sides equal),
-# not a specific winner, and log who won.
-log "Theory 2: divergent writes converge to a single value on both sides..."
+# Theory 2 recovery: the divergent same-key writes CONVERGE to the last-writer-wins
+# value on BOTH sides. Two guarantees are checked:
+#   (a) agreement — every node runs the identical tiebreak, so both sides settle on
+#       the same value (the deterministic guarantee); and
+#   (b) the winner is vMAJ, the LATER write. These containers share the host clock and
+#       vMAJ was written 2s after vMIN, so vMAJ's last_modified is strictly newer.
+# vMIN winning here would mean a stale write beat a newer one — the partition-heal
+# clobber bug (anti-entropy/read-repair treating an unreachable peer as "absent" and
+# pushing a stale copy over the winner). We assert vMAJ so that regression can't hide.
+log "Theory 2: divergent writes converge to the later write (vMAJ) on both sides..."
 for _ in $(seq 1 40); do
   awsd "$MIN_IP" s3 cp s3://sb/k /data/k.min >/dev/null 2>&1 || true
   awsd "$MAJ_IP" s3 cp s3://sb/k /data/k.maj >/dev/null 2>&1 || true
-  [ -s "$WORKDIR/k.min" ] && cmp -s "$WORKDIR/k.min" "$WORKDIR/k.maj" && break
+  [ -s "$WORKDIR/k.min" ] && cmp -s "$WORKDIR/k.min" "$WORKDIR/k.maj" &&
+    [ "$(cat "$WORKDIR/k.min")" = vMAJ ] && break
   sleep 1
 done
 cmp -s "$WORKDIR/k.min" "$WORKDIR/k.maj" ||
   fail "sides did not converge: minority='$(cat "$WORKDIR/k.min" 2>/dev/null)' majority='$(cat "$WORKDIR/k.maj" 2>/dev/null)'"
-log "converged to '$(cat "$WORKDIR/k.min")' (LWW winner; vMAJ expected, vMIN possible under skew)"
+[ "$(cat "$WORKDIR/k.min")" = vMAJ ] ||
+  fail "converged to the wrong (stale) winner '$(cat "$WORKDIR/k.min")', expected vMAJ (later write)"
+log "converged to 'vMAJ' (LWW winner = later write)"
 
 log "PASS: split-brain e2e [$N nodes, {${MAJ[*]}} vs {${MIN[*]}}] — CP resynced; data converged via LWW"

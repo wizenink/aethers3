@@ -43,9 +43,13 @@ defmodule AetherS3.Replication.AntiEntropy do
     |> RingServer.replicas()
     |> Enum.reject(&(&1 == Node.self()))
     |> Enum.each(fn replica ->
-      # Push only if our version supersedes what the replica holds (missing, older,
-      # or a concurrent loser). If the replica is newer, ITS anti-entropy pushes to us.
-      if Conflict.supersedes?(local_meta, fetch(replica, bucket, key)) do
+      # Push only when we've CONFIRMED the replica's state and our version supersedes
+      # what it holds (missing, older, or a concurrent loser). A transient RPC failure
+      # is NOT evidence the replica is empty: treating "unreachable" as "absent" would
+      # let a stale local copy clobber a newer remote one (supersedes?(_, nil) is true).
+      # On :error we skip and retry next tick. If the replica is newer, ITS sweep pushes to us.
+      with {:ok, remote} <- fetch(replica, bucket, key),
+           true <- Conflict.supersedes?(local_meta, remote) do
         Logger.info("anti-entropy: repairing #{bucket}/#{key} → #{replica}")
         Coordinator.push_object(replica, bucket, key, local_meta)
         :telemetry.execute([:aether, :anti_entropy, :repair], %{count: 1}, %{})
@@ -76,21 +80,24 @@ defmodule AetherS3.Replication.AntiEntropy do
   defp safely_replicated?(replicas, bucket, key, meta) do
     Enum.all?(replicas, fn node ->
       case fetch(node, bucket, key) do
-        nil -> false
-        remote -> not Conflict.supersedes?(meta, remote)
+        {:ok, nil} -> false
+        {:ok, remote} -> not Conflict.supersedes?(meta, remote)
+        :error -> false
       end
     end)
   end
 
-  # A replica's meta, or nil if it doesn't have it / is unreachable.
+  # A reachable replica's meta as {:ok, meta} or {:ok, nil} (confirmed absent); :error
+  # if the node is unreachable / the RPC failed. Callers MUST NOT treat :error as absent:
+  # "unknown" is not "empty", and conflating them lets a stale write win on heal.
   defp fetch(node, bucket, key) do
     case :erpc.call(node, ObjectMeta, :get, [bucket, key], 2_000) do
-      {:ok, meta} -> meta
-      _ -> nil
+      {:ok, meta} -> {:ok, meta}
+      _ -> {:ok, nil}
     end
   rescue
-    _ -> nil
+    _ -> :error
   catch
-    _, _ -> nil
+    _, _ -> :error
   end
 end

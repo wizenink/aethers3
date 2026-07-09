@@ -35,6 +35,19 @@ defmodule AetherS3.Replication.CoordinatorTest do
     assert Enum.sort(targets) == [:a, :c]
   end
 
+  test "plan/2 never repairs an unreachable (:error) replica, only a reachable-absent one" do
+    # :b is reachable-but-absent (:not_found) -> a legit repair target.
+    # :c is unreachable (:error) -> state unknown, must NOT be a target, even though
+    # supersedes?(winner, nil) is true. Treating "unknown" as "absent" is exactly what
+    # let a stale write clobber a newer one on partition heal.
+    v = meta(%{a: 1})
+    results = [{:a, {:ok, v}}, {:b, :not_found}, {:c, :error}]
+    {winner, _meta, targets} = Coordinator.plan([:a, :b, :c], results)
+
+    assert winner == :a
+    assert targets == [:b]
+  end
+
   test "plan/2 resolves a true conflict (concurrent VVs) deterministically" do
     # {a:1} and {b:1} are concurrent -> winner decided by the etag tiebreak.
     ca = meta(%{a: 1})
