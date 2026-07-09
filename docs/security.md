@@ -104,6 +104,21 @@ prefix. Setting `x-amz-acl: private` (empty grants) on an object clears its ACL.
 Managing an object/prefix ACL (`PUT`/`GET ?acl`) is owner/admin-only — bucket
 listing is never granted by a scoped grant (it stays a bucket-wide `:list`).
 
+### Auth/ACL caching
+
+Every authenticated request resolves the access key → secret (auth), the user's
+admin flag + groups, and the bucket's owner + grants (authz) — all from the
+control plane. To keep the hot path off a Raft round-trip, those lookups are
+cached for `AETHER_CP_CACHE_TTL_MS` (default 1s) and served stale if the CP is
+briefly unreachable (so a node keeps serving objects it already holds during a
+partition instead of failing auth).
+
+The tradeoff is **bounded staleness**: a revoked key or changed grant is enforced
+immediately on the node that made the change (its cache entry is invalidated), but
+takes up to one TTL to propagate to other nodes — and until reconnect on a
+partitioned node. Set `AETHER_CP_CACHE_TTL_MS=0` if you need every request to
+reflect the latest identity/ACL state at the cost of a CP read per request.
+
 ## Admin API
 
 Dynamic identity and group management is served under `/admin` on the **admin

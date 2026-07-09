@@ -60,6 +60,16 @@ if config_env() != :test do
          :write_quorum,
          AetherS3.Config.write_quorum(System.get_env("AETHER_WRITE_QUORUM", "1"))
 
+  # Control-plane read cache TTL, in MILLISECONDS (default 1000). Fronts the hot
+  # per-request CP lookups (creds/identity/bucket/groups) so an authenticated object
+  # request skips a leader round-trip and survives a brief CP outage (serving the
+  # last known-good value). The cost is bounded staleness: a revoked key or changed
+  # grant is observed within one TTL on other nodes. Set 0 to disable (always read
+  # the CP — strongest consistency, a leader round-trip per request).
+  config :aether_s3,
+         :cp_cache_ttl_ms,
+         String.to_integer(System.get_env("AETHER_CP_CACHE_TTL_MS", "1000"))
+
   # Control-plane dead-member eviction is OPT-IN: set AETHER_CP_EVICT_GRACE to a
   # number of SECONDS a member must be unreachable before the Ra leader evicts it
   # (one per cycle). Unset/empty = disabled (the safe default — eviction is destructive).

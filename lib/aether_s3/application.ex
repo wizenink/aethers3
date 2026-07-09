@@ -18,6 +18,9 @@ defmodule AetherS3.Application do
             {CubDB, data_dir: Path.join(data_dir, "objmeta"), name: AetherS3.ObjectMeta.DB},
             id: :objmeta_db
           ),
+          # Read-through cache for hot CP lookups (creds/identity/bucket/groups) —
+          # up before Khepri so the first request's misses just fall through.
+          {AetherS3.ControlPlane.Cache, []},
           {AetherS3.ControlPlane.Khepri, name: AetherS3.ControlPlane.Khepri},
           {AetherS3.ControlPlane.Cluster, name: AetherS3.ControlPlane.Cluster},
           {AetherS3.Replication.AntiEntropy, name: AetherS3.Replication.AntiEntropy},

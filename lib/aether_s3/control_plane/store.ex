@@ -8,30 +8,38 @@ defmodule AetherS3.ControlPlane.Store do
   @default_cp_timeout 5_000
 
   alias AetherS3.Auth.Grants
+  alias AetherS3.ControlPlane.Cache
 
   @impl AetherS3.ControlPlane
   def create_bucket(name, owner) do
-    cp_put([:buckets, name], %{
-      created_at: DateTime.utc_now(),
-      owner: owner,
-      grants: [],
-      scoped_grants: []
-    })
+    result =
+      cp_put([:buckets, name], %{
+        created_at: DateTime.utc_now(),
+        owner: owner,
+        grants: [],
+        scoped_grants: []
+      })
+
+    Cache.invalidate({:bucket, name})
+    result
   end
 
   @impl AetherS3.ControlPlane
-  def bucket_exists?(name) do
-    match?(true, :khepri.exists(@store, [:buckets, name], read_opts()))
-  end
+  def bucket_exists?(name), do: get_bucket(name) != nil
 
   @impl AetherS3.ControlPlane
-  def get_bucket(name), do: cp_get([:buckets, name])
+  def get_bucket(name), do: Cache.fetch({:bucket, name}, fn -> cp_fetch([:buckets, name]) end)
 
   @impl AetherS3.ControlPlane
   def set_bucket_grants(name, grants) do
     case get_bucket(name) do
-      nil -> {:error, :no_such_bucket}
-      record -> cp_put([:buckets, name], record |> Map.put(:grants, grants) |> Map.delete(:acl))
+      nil ->
+        {:error, :no_such_bucket}
+
+      record ->
+        result = cp_put([:buckets, name], record |> Map.put(:grants, grants) |> Map.delete(:acl))
+        Cache.invalidate({:bucket, name})
+        result
     end
   end
 
@@ -48,7 +56,9 @@ defmodule AetherS3.ControlPlane.Store do
 
       record ->
         scoped = put_scope(Grants.scoped(record), scope, grants)
-        cp_put([:buckets, name], Map.put(record, :scoped_grants, scoped))
+        result = cp_put([:buckets, name], Map.put(record, :scoped_grants, scoped))
+        Cache.invalidate({:bucket, name})
+        result
     end
   end
 
@@ -69,33 +79,49 @@ defmodule AetherS3.ControlPlane.Store do
   @impl AetherS3.ControlPlane
   def delete_bucket(name) do
     case AetherS3.Replication.Coordinator.list(name) do
-      [] -> cp_delete([:buckets, name])
-      _ -> {:error, :not_empty}
+      [] ->
+        result = cp_delete([:buckets, name])
+        Cache.invalidate({:bucket, name})
+        result
+
+      _ ->
+        {:error, :not_empty}
     end
   end
 
   @impl AetherS3.ControlPlane
   def put_user(name, admin) do
-    cp_put([:users, name], %{admin: admin, created_at: DateTime.utc_now()})
+    result = cp_put([:users, name], %{admin: admin, created_at: DateTime.utc_now()})
+    Cache.invalidate({:user, name})
+    result
   end
 
   @impl AetherS3.ControlPlane
-  def get_user(name), do: cp_get([:users, name])
+  def get_user(name), do: Cache.fetch({:user, name}, fn -> cp_fetch([:users, name]) end)
 
   @impl AetherS3.ControlPlane
   def put_key(access_key, user, secret_enc) do
-    cp_put([:keys, access_key], %{
-      user: user,
-      secret_enc: secret_enc,
-      created_at: DateTime.utc_now()
-    })
+    result =
+      cp_put([:keys, access_key], %{
+        user: user,
+        secret_enc: secret_enc,
+        created_at: DateTime.utc_now()
+      })
+
+    Cache.invalidate({:key, access_key})
+    result
   end
 
   @impl AetherS3.ControlPlane
-  def get_key(access_key), do: cp_get([:keys, access_key])
+  def get_key(access_key),
+    do: Cache.fetch({:key, access_key}, fn -> cp_fetch([:keys, access_key]) end)
 
   @impl AetherS3.ControlPlane
-  def delete_key(access_key), do: cp_delete([:keys, access_key])
+  def delete_key(access_key) do
+    result = cp_delete([:keys, access_key])
+    Cache.invalidate({:key, access_key})
+    result
+  end
 
   @impl AetherS3.ControlPlane
   def list_users, do: named(cp_get_many([:users, @star]))
@@ -107,14 +133,21 @@ defmodule AetherS3.ControlPlane.Store do
 
   @impl AetherS3.ControlPlane
   def delete_user(name) do
-    # Cascade: a user's access keys go with them.
+    # Cascade: a user's access keys go with them (each delete_key invalidates its
+    # own cache entry).
     Enum.each(keys_of(name), &delete_key/1)
-    cp_delete([:users, name])
+    result = cp_delete([:users, name])
+    Cache.invalidate({:user, name})
+    result
   end
 
   @impl AetherS3.ControlPlane
   def put_group(name, members) do
-    cp_put([:groups, name], %{members: Enum.uniq(members), created_at: DateTime.utc_now()})
+    result =
+      cp_put([:groups, name], %{members: Enum.uniq(members), created_at: DateTime.utc_now()})
+
+    Cache.invalidate_groups()
+    result
   end
 
   @impl AetherS3.ControlPlane
@@ -124,7 +157,11 @@ defmodule AetherS3.ControlPlane.Store do
   def list_groups, do: named(cp_get_many([:groups, @star]))
 
   @impl AetherS3.ControlPlane
-  def delete_group(name), do: cp_delete([:groups, name])
+  def delete_group(name) do
+    result = cp_delete([:groups, name])
+    Cache.invalidate_groups()
+    result
+  end
 
   @impl AetherS3.ControlPlane
   def add_group_member(name, user) do
@@ -142,12 +179,21 @@ defmodule AetherS3.ControlPlane.Store do
     end
   end
 
-  # Groups the user belongs to (scan-and-filter — fine at our scale).
+  # Groups the user belongs to (scan-and-filter — fine at our scale). Cached per
+  # user; any group write clears the whole group namespace (see invalidate_groups).
   @impl AetherS3.ControlPlane
   def groups_of(user) do
-    for {path, %{members: members}} <- cp_get_many([:groups, @star]),
-        user in members,
-        do: List.last(path)
+    Cache.fetch({:groups, user}, fn -> groups_of_cp(user) end)
+  end
+
+  defp groups_of_cp(user) do
+    case :khepri.get_many(@store, [:groups, @star], read_opts()) do
+      {:ok, map} ->
+        {:ok, for({path, %{members: members}} <- map, user in members, do: List.last(path))}
+
+      {:error, _} ->
+        :error
+    end
   end
 
   # --- bounded Khepri access ---
@@ -181,6 +227,17 @@ defmodule AetherS3.ControlPlane.Store do
     case :khepri.get(@store, path, read_opts()) do
       {:ok, data} when is_map(data) -> data
       _ -> nil
+    end
+  end
+
+  # Tri-state read for the cache: distinguish "reachable, absent" from "unreachable"
+  # so the cache can serve stale on a CP outage but still report a genuine absence.
+  #   {:ok, map} found | {:ok, nil} reachable-but-absent | :error unreachable
+  defp cp_fetch(path) do
+    case :khepri.get(@store, path, read_opts()) do
+      {:ok, data} when is_map(data) -> {:ok, data}
+      {:ok, _} -> {:ok, nil}
+      {:error, _} -> :error
     end
   end
 

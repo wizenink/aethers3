@@ -79,6 +79,7 @@ defmodule AetherS3.Config do
     |> put(toml, "admin_token", :admin_token)
     |> put(toml, "tls_cert", :tls_cert)
     |> put(toml, "tls_key", :tls_key)
+    |> put(toml, "cp_cache_ttl_ms", :cp_cache_ttl_ms)
     |> put(toml, "cp_evict_grace", :cp_evict_grace_ms, &(&1 * 1000))
     |> put(toml, "mpu_reap_age", :mpu_reap_age_ms, &(&1 * 1000))
     |> put(toml, "staging_sweep_age", :staging_sweep_age_ms, &(&1 * 1000))

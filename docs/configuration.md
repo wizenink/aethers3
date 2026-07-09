@@ -29,6 +29,7 @@ separately — see [Clustering](clustering.md).
 | `AETHER_GOSSIP_SECRET` | _(unset)_ | Optional shared secret encrypting gossip. |
 | `AETHER_NODE_BASENAME` | `aether` | Node basename for building peer names under DNSPoll. |
 | **Maintenance** | | |
+| `AETHER_CP_CACHE_TTL_MS` | `1000` | Milliseconds to cache hot control-plane lookups (creds, identity, bucket, groups) so authenticated requests skip a leader round-trip and survive a brief CP outage. Higher = fewer CP reads but staler auth/ACLs; `0` disables (always read the CP). |
 | `AETHER_CP_EVICT_GRACE` | _(unset)_ | Seconds an unreachable control-plane member waits before the Raft leader evicts it. Opt-in. |
 | `AETHER_MPU_REAP_AGE` | _(unset)_ | Seconds after which an abandoned multipart upload is swept. Opt-in. |
 | `AETHER_STAGING_SWEEP_AGE` | `3600` | Seconds a crashed-write staging temp must age before reclaim. Always on. |
