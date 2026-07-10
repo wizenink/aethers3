@@ -11,7 +11,11 @@ defmodule AetherS3.Replication.Receiver do
 
   def begin(bucket, key, token) do
     File.mkdir_p!(Path.dirname(BlobStore.path(bucket, key)))
-    File.rm(tmp_path(bucket, key, token))
+    # Create the (empty) temp up front. A ZERO-byte object streams no chunks, so
+    # write_chunk/4 never fires — without this there'd be no file for finish/4 to
+    # rename, and empty objects (incl. those created by unsupported CopyObject
+    # requests) couldn't replicate: `:ok = File.rename` would badmatch on :enoent.
+    File.write!(tmp_path(bucket, key, token), "")
     :ok
   end
 
@@ -20,10 +24,14 @@ defmodule AetherS3.Replication.Receiver do
     :ok
   end
 
-  # Atomically publish the staged blob, then write metadata (metadata-last).
+  # Atomically publish the staged blob, then write metadata (metadata-last). If the
+  # staged temp is gone (e.g. the object was deleted mid-repair), don't crash the
+  # push — the next anti-entropy cycle reconciles.
   def finish(bucket, key, token, meta) do
-    :ok = File.rename(tmp_path(bucket, key, token), BlobStore.path(bucket, key))
-    commit(bucket, key, meta)
+    case File.rename(tmp_path(bucket, key, token), BlobStore.path(bucket, key)) do
+      :ok -> commit(bucket, key, meta)
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # Meta-only write — used for manifest objects and upload markers (no blob).
