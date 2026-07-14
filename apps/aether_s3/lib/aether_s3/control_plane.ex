@@ -2,6 +2,7 @@ defmodule AetherS3.ControlPlane do
   @callback create_bucket(name :: String.t(), owner :: String.t() | nil) :: :ok
   @callback bucket_exists?(name :: String.t()) :: boolean()
   @callback get_bucket(name :: String.t()) :: map() | nil
+  @callback list_buckets() :: [map()]
   @callback set_bucket_grants(name :: String.t(), grants :: [map()]) ::
               :ok | {:error, :no_such_bucket}
   @callback set_bucket_acl(name :: String.t(), acl :: String.t()) ::
@@ -27,5 +28,6 @@ defmodule AetherS3.ControlPlane do
   @callback put_key(access_key :: String.t(), user :: String.t(), secret_enc :: binary()) :: :ok
   @callback get_key(access_key :: String.t()) :: map() | nil
   @callback keys_of(user :: String.t()) :: [String.t()]
+  @callback list_keys() :: [map()]
   @callback delete_key(access_key :: String.t()) :: :ok
 end

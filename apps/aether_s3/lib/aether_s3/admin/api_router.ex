@@ -8,7 +8,16 @@ defmodule AetherS3.Admin.ApiRouter do
       GET    /admin/users                                         -> list users
       DELETE /admin/users/:name                                   -> delete user (+keys)
       POST   /admin/users/:name/keys                              -> mint an access key
+      GET    /admin/keys                                          -> list keys
       DELETE /admin/keys/:access_key                              -> revoke a key
+      POST   /admin/groups           {"name": ..}                 -> create group
+      GET    /admin/groups                                        -> list groups
+      DELETE /admin/groups/:name                                  -> delete group
+      POST   /admin/groups/:name/members  {"user": ..}            -> add member
+      DELETE /admin/groups/:name/members/:user                    -> remove member
+      GET    /admin/buckets                                       -> list buckets
+      POST   /admin/buckets          {"name": ..}                 -> create bucket
+      DELETE /admin/buckets/:name                                 -> delete bucket (empty only)
 
   With no token configured the whole API is disabled (every request is 401), so a
   node can't have identities minted against it until an operator sets a token.
@@ -88,6 +97,47 @@ defmodule AetherS3.Admin.ApiRouter do
     json(conn, 200, %{groups: groups})
   end
 
+  get "/keys" do
+    keys = ControlPlane.list_keys() |> Enum.map(&key_view/1)
+    json(conn, 200, %{keys: keys})
+  end
+
+  get "/buckets" do
+    buckets = ControlPlane.list_buckets() |> Enum.map(&bucket_view/1)
+    json(conn, 200, %{buckets: buckets})
+  end
+
+  post "/buckets" do
+    case read_json(conn) do
+      {:ok, %{"name" => name}, conn} ->
+        cond do
+          not valid_bucket_name?(name) ->
+            json(conn, 400, %{error: "invalid bucket name"})
+
+          ControlPlane.bucket_exists?(name) ->
+            json(conn, 409, %{error: "bucket already exists"})
+
+          true ->
+            # Console-created buckets are admin-owned (owner nil) until an ACL is set.
+            case ControlPlane.create_bucket(name, nil) do
+              :ok -> json(conn, 201, %{name: name})
+              {:error, :unavailable} -> unavailable(conn)
+            end
+        end
+
+      _ ->
+        json(conn, 400, %{error: "expected a JSON body with a \"name\""})
+    end
+  end
+
+  delete "/buckets/:name" do
+    case ControlPlane.delete_bucket(name) do
+      :ok -> send_resp(conn, 204, "")
+      {:error, :not_empty} -> json(conn, 409, %{error: "bucket not empty"})
+      {:error, :unavailable} -> unavailable(conn)
+    end
+  end
+
   delete "/groups/:name" do
     reply_204(conn, ControlPlane.delete_group(name))
   end
@@ -154,6 +204,15 @@ defmodule AetherS3.Admin.ApiRouter do
     end
   end
 
+  # S3 DNS-style bucket naming: 3–63 chars, lowercase alnum / hyphen / dot,
+  # must start and end alphanumeric. Conservative on the create path (the S3 PUT
+  # route is permissive; the console shouldn't mint names clients can't address).
+  defp valid_bucket_name?(name) when is_binary(name) do
+    String.length(name) in 3..63 and name =~ ~r/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/
+  end
+
+  defp valid_bucket_name?(_), do: false
+
   defp reply_204(conn, :ok), do: send_resp(conn, 204, "")
   defp reply_204(conn, {:error, :unavailable}), do: unavailable(conn)
 
@@ -171,4 +230,30 @@ defmodule AetherS3.Admin.ApiRouter do
     |> put_resp_content_type("application/json")
     |> send_resp(status, JSON.encode!(data))
   end
+
+  # ── JSON-friendly views (built-in JSON can't encode DateTime or grantee tuples) ──
+  defp key_view(k), do: %{access_key: k.name, user: k[:user], created_at: iso(k[:created_at])}
+
+  defp bucket_view(b) do
+    %{
+      name: b.name,
+      owner: b[:owner],
+      created_at: iso(b[:created_at]),
+      grants: Enum.map(b[:grants] || [], &grant_view/1),
+      scoped_grants:
+        Enum.map(b[:scoped_grants] || [], fn e ->
+          %{scope: e.scope, grants: Enum.map(e.grants, &grant_view/1)}
+        end)
+    }
+  end
+
+  defp grant_view(%{grantee: g, permission: p}),
+    do: %{grantee: grantee(g), permission: to_string(p)}
+
+  defp grantee(:everyone), do: "everyone"
+  defp grantee({:user, n}), do: "user:" <> n
+  defp grantee({:group, n}), do: "group:" <> n
+
+  defp iso(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp iso(_), do: nil
 end

@@ -28,3 +28,7 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 aethers3-*.tar
 
+# aether_console: esbuild output is generated from assets/ — rebuilt by the dev
+# watcher / release pipeline, never committed. (favicon.ico + robots.txt stay.)
+apps/aether_console/priv/static/assets/
+

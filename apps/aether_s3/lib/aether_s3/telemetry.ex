@@ -19,6 +19,9 @@ defmodule AetherS3.Telemetry do
 
   @impl true
   def init(_arg) do
+    # Lock-free per-node op counters (read by Cluster.Status for the console's rate viz).
+    AetherS3.Telemetry.OpCounters.setup()
+
     children = [
       {TelemetryMetricsPrometheus.Core, metrics: metrics()},
       {:telemetry_poller,

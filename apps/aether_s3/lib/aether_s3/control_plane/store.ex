@@ -31,6 +31,9 @@ defmodule AetherS3.ControlPlane.Store do
   def get_bucket(name), do: Cache.fetch({:bucket, name}, fn -> cp_fetch([:buckets, name]) end)
 
   @impl AetherS3.ControlPlane
+  def list_buckets, do: named(cp_get_many([:buckets, @star]))
+
+  @impl AetherS3.ControlPlane
   def set_bucket_grants(name, grants) do
     case get_bucket(name) do
       nil ->
@@ -130,6 +133,9 @@ defmodule AetherS3.ControlPlane.Store do
   def keys_of(user) do
     for {path, %{user: ^user}} <- cp_get_many([:keys, @star]), do: List.last(path)
   end
+
+  @impl AetherS3.ControlPlane
+  def list_keys, do: named(cp_get_many([:keys, @star]))
 
   @impl AetherS3.ControlPlane
   def delete_user(name) do

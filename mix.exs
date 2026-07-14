@@ -25,6 +25,13 @@ defmodule AetherS3.Umbrella.MixProject do
             linux: [os: :linux, cpu: :x86_64]
           ]
         ]
+      ],
+      # The web UI, as its own release: bundles ONLY :aether_console (+ Phoenix),
+      # never the storage app. Build the esbuild assets first (`mix esbuild
+      # aether_console --minify`) so priv/static/assets is populated before
+      # `mix release aether_console`. Prod endpoint config lives in runtime.exs.
+      aether_console: [
+        applications: [aether_console: :permanent]
       ]
     ]
   end

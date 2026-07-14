@@ -16,7 +16,8 @@ defmodule AetherS3.Cluster.Status do
 
   @doc "Consolidated snapshot: the querying node's leader view + each node's local view."
   def snapshot do
-    nodes = [Node.self() | Node.list()]
+    reachable = [Node.self() | Node.list()]
+    nodes = members(reachable)
 
     views =
       nodes
@@ -28,6 +29,21 @@ defmodule AetherS3.Cluster.Status do
       end)
 
     %{leader: leader(), node_count: map_size(views), nodes: views}
+  end
+
+  # The EXPECTED membership: the Raft/Khepri config retains DOWN members until
+  # eviction, so this includes nodes that are currently unreachable — which is what
+  # lets `/cluster` report a lost node as down even on a fresh load, instead of just
+  # listing who's reachable right now. `view_of/1` will fail its erpc for a down
+  # member and mark it `error` (the client renders that as down). Bounded via a task
+  # so a wedged local store can't hang the status endpoint; falls back to reachable.
+  defp members(reachable) do
+    task = Task.async(fn -> :khepri_cluster.nodes() end)
+
+    case Task.yield(task, @timeout) || Task.shutdown(task) do
+      {:ok, {:ok, nodes}} when is_list(nodes) and nodes != [] -> Enum.uniq(reachable ++ nodes)
+      _ -> reachable
+    end
   end
 
   # Own view locally; peers over erpc, capturing failures so one down node doesn't
@@ -48,7 +64,8 @@ defmodule AetherS3.Cluster.Status do
     %{
       members: length(Node.list()) + 1,
       knows_leader: leader() != nil,
-      objects: ObjectMeta.count()
+      objects: ObjectMeta.count(),
+      ops: AetherS3.Telemetry.OpCounters.read()
     }
   end
 

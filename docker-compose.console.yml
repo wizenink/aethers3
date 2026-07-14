@@ -1,0 +1,27 @@
+# Overlay for docker-compose.static5.yml (or .static.yml): turns on the admin API
+# on aether1 so the aether_console web UI can manage buckets + identity against it.
+#
+# No ports are published — reach the node by its container IP on the `aether`
+# network (Linux / OrbStack route these to the host directly). The console is a
+# pure HTTP client of the admin port (9001): /cluster for the live topology view
+# (works without a token) and /admin for buckets + identity (needs the token; key
+# minting also needs the master key).
+#
+#   docker compose -f docker-compose.static5.yml -f docker-compose.console.yml up -d
+#   IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aether-static5-aether1-1)
+#
+# then, on the host (NOT from the umbrella root — that would boot a storage node too):
+#
+#   cd apps/aether_console
+#   AETHER_CONSOLE_NODES=http://$IP:9001 \
+#   AETHER_CONSOLE_ADMIN_TOKEN=consoletoken \
+#     mix phx.server            # http://localhost:4000
+
+name: aether-static5
+
+services:
+  aether1:
+    environment:
+      # Gate the admin API and let it mint keys. Must match AETHER_CONSOLE_ADMIN_TOKEN.
+      AETHER_ADMIN_TOKEN: "consoletoken"
+      AETHER_MASTER_KEY: "cluster-master-key-change-me"

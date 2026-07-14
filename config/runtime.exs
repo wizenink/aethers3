@@ -1,5 +1,57 @@
 import Config
 
+# ── aether_console (web UI): admin base URLs to read live cluster state from.
+# Point it at a real cluster, e.g. AETHER_CONSOLE_NODES=http://host1:9001,http://host2:9001
+config :aether_console,
+       :cluster_nodes,
+       (System.get_env("AETHER_CONSOLE_NODES") || "http://localhost:9001")
+       |> String.split(",", trim: true)
+
+# Bearer token the console presents to the cluster's /admin API (must match the
+# cluster's AETHER_ADMIN_TOKEN). Unset -> Buckets/Identity show "not configured".
+config :aether_console, :admin_token, System.get_env("AETHER_CONSOLE_ADMIN_TOKEN")
+
+# Prod release endpoint for the console web UI. (Dev is configured in config.exs;
+# tests don't boot the endpoint.) The console holds admin creds — bind it on an
+# internal network / behind a reverse proxy, and front it with an auth gate.
+#
+# Gated on the console app being IN the running release: this same runtime.exs is
+# loaded by the STORAGE release too, which has no Phoenix endpoint — without this
+# guard the storage node would hit the raise below and refuse to boot.
+if config_env() == :prod and Code.ensure_loaded?(AetherConsoleWeb.Endpoint) do
+  secret_key_base =
+    System.get_env("AETHER_CONSOLE_SECRET_KEY_BASE") ||
+      raise """
+      AETHER_CONSOLE_SECRET_KEY_BASE is not set — the console can't sign sessions.
+      Generate one with:  mix phx.gen.secret   (or: openssl rand -base64 48)
+      """
+
+  host = System.get_env("AETHER_CONSOLE_HOST", "localhost")
+  port = String.to_integer(System.get_env("AETHER_CONSOLE_PORT", "4000"))
+
+  # Websocket origin allowlist. Defaults to the configured host; set a comma list
+  # to allow more, or "false" to disable the check (e.g. behind a trusted proxy).
+  check_origin =
+    case System.get_env("AETHER_CONSOLE_CHECK_ORIGIN") do
+      nil -> ["//#{host}"]
+      "false" -> false
+      list -> String.split(list, ",", trim: true)
+    end
+
+  config :aether_console, AetherConsoleWeb.Endpoint,
+    server: true,
+    url: [host: host, port: port],
+    http: [ip: {0, 0, 0, 0, 0, 0, 0, 0}, port: port],
+    secret_key_base: secret_key_base,
+    check_origin: check_origin
+end
+
+# Everything below configures the STORAGE node. This same runtime.exs is loaded
+# when the console runs ALONE (its own release, or `mix phx.server` from
+# apps/aether_console), where the AetherS3.* modules aren't in the code path — so
+# sections that reference them are guarded on this presence check.
+aether_s3_present? = Code.ensure_loaded?(AetherS3.Config)
+
 # Runtime configuration — evaluated on every boot (dev, test, prod releases).
 # A single S3 credential pair. Override via env vars in real deployments.
 config :aether_s3, :credentials, %{
@@ -42,7 +94,7 @@ config :aether_s3, :admin_port, String.to_integer(System.get_env("AETHER_ADMIN_P
 
 # Per-node operational config (env-driven). Test env keeps the values from
 # config/config.exs, so these only apply to dev/prod runtime.
-if config_env() != :test do
+if aether_s3_present? and config_env() != :test do
   config :aether_s3, :data_dir, System.get_env("AETHER_DATA_DIR", "tmp/aether_data")
 
   config :aether_s3,
@@ -142,8 +194,10 @@ end
 # Log level is a runtime knob (change it per deployment without a rebuild, or
 # live on a running node via `AetherS3.Config.set_log_level/1` over the remote
 # shell). config/config.exs sets the build-time default; this overrides it.
-if level = System.get_env("AETHER_LOG_LEVEL") do
-  config :logger, level: AetherS3.Config.log_level(level)
+if aether_s3_present? do
+  if level = System.get_env("AETHER_LOG_LEVEL") do
+    config :logger, level: AetherS3.Config.log_level(level)
+  end
 end
 
 # Production config file (TOML). Env vars above are the dev/default path; in
@@ -153,7 +207,7 @@ end
 # not application config, so they are NOT set here.
 toml_path = System.get_env("AETHER_CONFIG", "/etc/aether_s3/config.toml")
 
-if File.exists?(toml_path) do
+if aether_s3_present? and File.exists?(toml_path) do
   toml = Toml.decode_file!(toml_path)
 
   # The unit/type conversions live in AetherS3.Config (tested); here we just apply

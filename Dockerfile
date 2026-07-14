@@ -17,7 +17,9 @@ COPY apps/aether_s3/mix.exs apps/aether_s3/mix.exs
 RUN mix deps.get --only prod
 COPY config config
 COPY rel rel
-COPY apps apps
+# Only the storage app — this image is the aether_s3 release; the console is a
+# separate app/release and must not be compiled here (it would pull in Phoenix).
+COPY apps/aether_s3 apps/aether_s3
 # `mix rel` = compile + patch horus's :erts bug + assemble the aether_s3 release
 # (see the umbrella-root mix.exs aliases)
 RUN mix rel
