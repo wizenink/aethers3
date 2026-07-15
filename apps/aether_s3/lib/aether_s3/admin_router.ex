@@ -14,6 +14,10 @@ defmodule AetherS3.AdminRouter do
     * `GET /metrics` — Prometheus exposition (`AetherS3.Telemetry.scrape/0`).
     * `GET /cluster` — best-effort JSON snapshot of every node's view
       (`AetherS3.Cluster.Status.snapshot/0`); handy during a partition.
+    * `GET /whoami` — SigV4-authenticated identity probe: returns the signing
+      caller's `{user, admin}` as JSON. Unlike `/admin/*` (bearer token) this is
+      per-user, so the web console can verify a login credential and learn whether
+      it's an admin. Bad/absent signature → 403/401.
     * `/admin/*` — dynamic identity management (`AetherS3.Admin.ApiRouter`),
       gated by a bootstrap bearer token. The probe endpoints above stay open.
   """
@@ -54,10 +58,41 @@ defmodule AetherS3.AdminRouter do
     |> send_resp(200, JSON.encode!(AetherS3.Cluster.Status.snapshot()))
   end
 
+  # SigV4-authenticated identity probe. Reuses the S3 auth plug, which resolves the
+  # access key and (on a valid signature) assigns `%{user, admin}` — so the console
+  # can verify a login credential without the master key. A bad signature is halted
+  # with 403 by the plug itself; :anonymous means no usable signature was presented.
+  get "/whoami" do
+    conn = AetherS3.Plug.SigV4.call(conn, [])
+
+    cond do
+      conn.halted ->
+        conn
+
+      match?(%{user: _}, conn.assigns[:identity]) ->
+        %{user: user, admin: admin} = conn.assigns.identity
+        whoami_json(conn, 200, %{user: user, admin: admin})
+
+      conn.assigns[:identity] == :auth_disabled ->
+        # require_auth is off (dev): there is no identity to prove. Console login is
+        # only meaningful with auth on; report the open state rather than a user.
+        whoami_json(conn, 200, %{auth_disabled: true, admin: true})
+
+      true ->
+        whoami_json(conn, 401, %{error: "unauthenticated"})
+    end
+  end
+
   forward("/admin", to: AetherS3.Admin.ApiRouter)
 
   match _ do
     send_resp(conn, 404, "not found")
+  end
+
+  defp whoami_json(conn, status, data) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, JSON.encode!(data))
   end
 
   @ready_probe_default_ms 2_000

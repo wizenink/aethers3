@@ -3,6 +3,8 @@ defmodule AetherS3.AdminRouterTest do
   import Plug.Test
   import Plug.Conn
 
+  alias AetherS3.Auth.SigV4
+
   @opts AetherS3.AdminRouter.init([])
 
   defp request(method, path) do
@@ -65,6 +67,79 @@ defmodule AetherS3.AdminRouterTest do
 
   test "unknown admin path is 404" do
     assert request(:get, "/nope").status == 404
+  end
+
+  describe "GET /whoami" do
+    setup do
+      prev = Application.get_env(:aether_s3, :require_auth, true)
+      Application.put_env(:aether_s3, :require_auth, true)
+      on_exit(fn -> Application.put_env(:aether_s3, :require_auth, prev) end)
+      :ok
+    end
+
+    test "a valid signature returns the resolved identity as JSON" do
+      conn =
+        conn(:get, "/whoami")
+        |> sign("AKIAEXAMPLE", "devsecret")
+        |> AetherS3.AdminRouter.call(@opts)
+
+      assert conn.status == 200
+      assert get_resp_header(conn, "content-type") == ["application/json; charset=utf-8"]
+      assert JSON.decode!(conn.resp_body) == %{"user" => "root", "admin" => true}
+    end
+
+    test "a bad signature is 403 + halted" do
+      conn =
+        conn(:get, "/whoami")
+        |> sign("AKIAEXAMPLE", "not-the-real-secret")
+        |> AetherS3.AdminRouter.call(@opts)
+
+      assert conn.status == 403
+      assert conn.halted
+    end
+
+    test "no Authorization header is 401" do
+      conn = request(:get, "/whoami")
+      assert conn.status == 401
+      assert JSON.decode!(conn.resp_body) == %{"error" => "unauthenticated"}
+    end
+
+    test "with require_auth off it reports the open state" do
+      Application.put_env(:aether_s3, :require_auth, false)
+      conn = request(:get, "/whoami")
+      assert conn.status == 200
+      assert JSON.decode!(conn.resp_body) == %{"auth_disabled" => true, "admin" => true}
+    end
+  end
+
+  # In-test SigV4 signer (mirrors a client / aws-cli); host is "" for a test conn,
+  # which is exactly what the plug reads, so we sign with that same empty value.
+  defp sign(conn, access_key, secret) do
+    amz_date = DateTime.utc_now() |> Calendar.strftime("%Y%m%dT%H%M%SZ")
+    date = String.slice(amz_date, 0, 8)
+    region = "us-east-1"
+    service = "s3"
+    payload_hash = "UNSIGNED-PAYLOAD"
+
+    conn =
+      conn
+      |> put_req_header("x-amz-date", amz_date)
+      |> put_req_header("x-amz-content-sha256", payload_hash)
+
+    signed = ["host", "x-amz-content-sha256", "x-amz-date"]
+    headers = Enum.map(signed, fn h -> {h, conn |> get_req_header(h) |> List.first() || ""} end)
+
+    canonical = SigV4.canonical_request(conn.method, conn.request_path, "", headers, payload_hash)
+    scope = "#{date}/#{region}/#{service}/aws4_request"
+    sts = SigV4.string_to_sign(amz_date, scope, canonical)
+    signing_key = SigV4.derive_signing_key(secret, date, region, service)
+    signature = SigV4.signature(signing_key, sts)
+
+    auth =
+      "AWS4-HMAC-SHA256 Credential=#{access_key}/#{scope}, " <>
+        "SignedHeaders=#{Enum.join(signed, ";")}, Signature=#{signature}"
+
+    put_req_header(conn, "authorization", auth)
   end
 
   defp wait_for_leader(retries \\ 40) do

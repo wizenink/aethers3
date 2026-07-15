@@ -26,6 +26,9 @@ config :aether_console, AetherConsoleWeb.Endpoint,
 config :aether_console, :cluster_nodes, ["http://localhost:9001"]
 # Bearer token for the cluster's /admin API (users/keys/groups/buckets). Runtime-set.
 config :aether_console, :admin_token, nil
+# How operators authenticate to the console: :cluster (log in as a cluster identity)
+# is the only strategy today; :oidc is reserved. Overridden by AETHER_CONSOLE_AUTH.
+config :aether_console, :auth_strategy, :cluster
 
 config :phoenix, :json_library, Jason
 
@@ -46,4 +49,12 @@ if config_env() == :dev do
     watchers: [
       esbuild: {Esbuild, :install_and_run, [:aether_console, ~w(--sourcemap=inline --watch)]}
     ]
+end
+
+if config_env() == :test do
+  # The endpoint isn't served in tests, but ConnTest still needs a secret_key_base
+  # to sign session cookies.
+  config :aether_console, AetherConsoleWeb.Endpoint,
+    secret_key_base: "test_only_secret_key_base_padding_to_sixty_four_bytes_minimum_xxxxxx",
+    server: false
 end

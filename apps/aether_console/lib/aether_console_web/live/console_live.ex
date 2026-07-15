@@ -198,7 +198,7 @@ defmodule AetherConsoleWeb.ConsoleLive do
   def render(assigns) do
     ~H"""
     <div class="shell">
-      <.sidebar active={@live_action} />
+      <.sidebar active={@live_action} current_user={@current_user} />
       <main class="content">
         <.cluster :if={@live_action == :cluster} />
         <.buckets
@@ -254,7 +254,15 @@ defmodule AetherConsoleWeb.ConsoleLive do
         <svg viewBox="0 0 18 18"><path d="M2.5 5.5h4l1.6 1.8H15.5v7.2h-13Z" /><path d="M2.5 5.5V4h5" /></svg>
         <span>Objects</span><span class="soon-tag">soon</span>
       </.link>
-      <div class="side-foot"><span class="pulse"></span><span class="txt">live monitor</span></div>
+      <div class="side-foot">
+        <div class="user-chip">
+          <span>as <b>{@current_user.user}</b></span>
+          <.form for={%{}} action={~p"/logout"} method="delete">
+            <button class="logout" type="submit">sign out</button>
+          </.form>
+        </div>
+        <div class="monitor"><span class="pulse"></span><span class="txt">live monitor</span></div>
+      </div>
     </aside>
     """
   end

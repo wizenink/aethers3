@@ -11,6 +11,17 @@ config :aether_console,
 # cluster's AETHER_ADMIN_TOKEN). Unset -> Buckets/Identity show "not configured".
 config :aether_console, :admin_token, System.get_env("AETHER_CONSOLE_ADMIN_TOKEN")
 
+# How operators log in to the console. :cluster verifies an access key + secret
+# against the cluster (SigV4 GET /whoami); :oidc is reserved for a future strategy.
+auth_strategy =
+  case System.get_env("AETHER_CONSOLE_AUTH", "cluster") do
+    "cluster" -> :cluster
+    "oidc" -> :oidc
+    other -> raise "unknown AETHER_CONSOLE_AUTH: #{other} (expected cluster|oidc)"
+  end
+
+config :aether_console, :auth_strategy, auth_strategy
+
 # Prod release endpoint for the console web UI. (Dev is configured in config.exs;
 # tests don't boot the endpoint.) The console holds admin creds — bind it on an
 # internal network / behind a reverse proxy, and front it with an auth gate.

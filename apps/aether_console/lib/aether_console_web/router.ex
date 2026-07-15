@@ -13,9 +13,17 @@ defmodule AetherConsoleWeb.Router do
   scope "/", AetherConsoleWeb do
     pipe_through :browser
 
-    live "/", ConsoleLive, :cluster
-    live "/buckets", ConsoleLive, :buckets
-    live "/identity", ConsoleLive, :identity
-    live "/objects", ConsoleLive, :objects
+    get "/login", SessionController, :new
+    post "/login", SessionController, :create
+    delete "/logout", SessionController, :delete
+
+    # All console views live behind LiveView, so the auth gate is an on_mount hook:
+    # no session identity → redirect to /login.
+    live_session :require_user, on_mount: {AetherConsoleWeb.Auth, :require_user} do
+      live "/", ConsoleLive, :cluster
+      live "/buckets", ConsoleLive, :buckets
+      live "/identity", ConsoleLive, :identity
+      live "/objects", ConsoleLive, :objects
+    end
   end
 end

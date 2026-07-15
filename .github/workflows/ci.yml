@@ -48,6 +48,44 @@ jobs:
       - name: Run tests
         run: mix test
 
+  console-release:
+    name: Build console release
+    runs-on: ubuntu-latest
+
+    env:
+      MIX_ENV: prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Elixir/OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "29"
+          elixir-version: "1.20"
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-prod-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-prod-
+
+      - name: Install dependencies
+        run: mix deps.get --only prod
+
+      # Build the assets + assemble the release, exactly as the console image /
+      # tarball do — so a broken prod endpoint config, asset build, or release
+      # definition fails CI instead of a release tag.
+      - name: Build assets and release
+        run: |
+          mix esbuild.install --if-missing
+          mix esbuild aether_console --minify
+          mix release aether_console
+
   e2e-same-host:
     name: E2E (same-host multi-node)
     runs-on: ubuntu-latest

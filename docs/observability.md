@@ -12,6 +12,7 @@ off from public traffic. (The `/admin/*` identity-management API on the same por
 | `GET /ready/cp` | **Control-plane** readiness — 200 only if a bounded, *leader-routed* Khepri probe actually commits (a reachable leader holds quorum). Catches a phantom leader or lost quorum that a cached leaderboard lookup would miss; gate control-plane-aware routing/monitoring on this. |
 | `GET /metrics` | Prometheus exposition. |
 | `GET /cluster` | Best-effort JSON snapshot of every node's view (leader, per-node membership + object counts). Fans out via `erpc`; marks unreachable peers, so a partition is visible at a glance. |
+| `GET /whoami` | SigV4-authenticated identity check — returns the signing caller's `{user, admin}` as JSON. Per-user (unlike the token-gated `/admin/*`), so a tool such as the [web console](console.md) can verify a login credential. |
 
 Metrics exported today: S3 request latency + counts
 (`bandit_request_duration_milliseconds`, tagged by method/status), domain

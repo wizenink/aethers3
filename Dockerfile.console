@@ -1,0 +1,43 @@
+# Multi-stage build for the aether_console web UI. Separate from the aether_s3
+# image: this bundles only :aether_console (+ Phoenix), never the storage app.
+# The release bundles erts, so the runtime image needs no Erlang/Elixir.
+ARG ELIXIR_IMAGE=elixir:1.20-otp-29-slim
+ARG RUNTIME_IMAGE=debian:trixie-slim
+
+# ---- build ----
+FROM ${ELIXIR_IMAGE} AS build
+ENV MIX_ENV=prod
+WORKDIR /src
+# slim images ship no CA certs -> HTTPS to hex.pm fails ("no_cacerts_found")
+RUN apt-get update -y && apt-get install -y --no-install-recommends ca-certificates git \
+  && rm -rf /var/lib/apt/lists/*
+RUN mix local.hex --force && mix local.rebar --force
+# Umbrella: root mix.exs + every app's mix.exs are needed to resolve deps.
+COPY mix.exs mix.lock ./
+COPY apps/aether_s3/mix.exs apps/aether_s3/mix.exs
+COPY apps/aether_console/mix.exs apps/aether_console/mix.exs
+RUN mix deps.get --only prod
+COPY config config
+COPY apps apps
+# Build the (gitignored) esbuild assets, then assemble the release. This compiles
+# the umbrella but bundles only :aether_console (explicit `applications` list in
+# the root mix.exs); horus's :erts bug never bites since it isn't in this tree.
+RUN mix esbuild.install --if-missing \
+  && mix esbuild aether_console --minify \
+  && mix release aether_console
+
+# ---- runtime ----
+FROM ${RUNTIME_IMAGE} AS runtime
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends libssl3 libncurses6 ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+# The console is a standalone web server — it never joins the BEAM cluster, so
+# turn off Erlang distribution (the shared rel/env.sh.eex otherwise defaults it on).
+ENV RELEASE_DISTRIBUTION=none
+WORKDIR /app
+COPY --from=build /src/_build/prod/rel/aether_console ./
+# 4000 = the console HTTP port (AETHER_CONSOLE_PORT).
+EXPOSE 4000
+ENTRYPOINT ["/app/bin/aether_console"]
+CMD ["start"]

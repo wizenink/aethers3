@@ -36,7 +36,8 @@ defmodule AetherConsole.MixProject do
       {:bandit, "~> 1.12"},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
-      {:esbuild, "~> 0.8", runtime: Mix.env() == :dev}
+      {:esbuild, "~> 0.8", runtime: Mix.env() == :dev},
+      {:lazy_html, ">= 0.1.0", only: :test}
     ]
   end
 end

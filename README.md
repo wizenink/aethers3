@@ -43,6 +43,13 @@ docker compose up --build --scale aether=3
 Each container names itself `aether@<container-ip>` and discovers peers via
 DNSPoll, forming a Raft cluster on startup. The object API is on port 9000.
 
+## Web console
+
+A separate app, `aether_console`, provides a web UI to manage identities and
+buckets and watch the cluster live (nodes, leader, replica flow). It runs as its
+own release and talks to the cluster over HTTP. See [Web console](docs/console.md)
+to run it locally or deploy it in front of a cluster.
+
 ## Documentation
 
 | Guide | What's in it |
@@ -52,6 +59,7 @@ DNSPoll, forming a Raft cluster on startup. The object API is on port 9000.
 | [Configuration](docs/configuration.md) | Every environment variable, live log level, and the production TOML file. |
 | [Clustering](docs/clustering.md) | Discovery strategies, node name & cookie, ports, LAN/Proxmox deploys, supervision & control-plane self-healing. |
 | [Observability](docs/observability.md) | Health/readiness/metrics/cluster endpoints and the Prometheus + Grafana showcase. |
+| [Web console](docs/console.md) | The `aether_console` UI — live cluster/replica-flow view, bucket & identity management, config, running it, security posture. |
 | [Development](docs/development.md) | Building, releases, and the unit + end-to-end test suites. |
 
 ## Status and limitations
