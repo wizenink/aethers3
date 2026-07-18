@@ -1,5 +1,8 @@
 # AetherS3
 
+[![aether_s3 image](https://img.shields.io/docker/v/wizenink/aether_s3?sort=semver&logo=docker&label=aether_s3)](https://hub.docker.com/r/wizenink/aether_s3)
+[![aether_console image](https://img.shields.io/docker/v/wizenink/aether_console?sort=semver&logo=docker&label=aether_console)](https://hub.docker.com/r/wizenink/aether_console)
+
 A self-hostable, distributed, S3-compatible object store that runs on the BEAM.
 
 AetherS3 stores objects across a cluster of nodes and speaks enough of the S3
