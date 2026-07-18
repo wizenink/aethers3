@@ -1,0 +1,35 @@
+name: aetherbench
+
+# A fixed-size AetherS3 cluster for benchmarking. Same DNS-discovery model as the
+# top-level compose (DNSPoll resolves "aether" to every replica IP). Every knob
+# that affects a run is an env var so a tuning pass is just a different value:
+#
+#   ERL_ZFLAGS  - extra BEAM VM args, appended by `erl` at boot (NO rebuild needed).
+#                 This is the whole point of the harness: change it, re-run, compare.
+#   AUTH        - "true" exercises the SigV4 path (root creds below); "false" skips it.
+#   RF / WQ     - replication factor and write quorum.
+#
+# Scale with:  docker compose -f compose.bench.yml up -d --scale aether=<N>
+# (run.sh does this for you.)
+services:
+  aether:
+    image: ${IMAGE:-wizenink/aether_s3:0.5.0}
+    command: ["start"]
+    environment:
+      RELEASE_COOKIE: ${COOKIE:-bench-cluster}
+      RELEASE_DISTRIBUTION: name
+      AETHER_REQUIRE_AUTH: "${AUTH:-false}"
+      AETHER_ACCESS_KEY: ${ACCESS_KEY:-AKIAEXAMPLE}
+      AETHER_SECRET_KEY: ${SECRET_KEY:-devsecret}
+      AETHER_NODE_BASENAME: aether
+      AETHER_DNS_QUERY: aether
+      AETHER_DATA_DIR: /data
+      AETHER_PORT: "9000"
+      AETHER_WRITE_QUORUM: "${WQ:-1}"
+      AETHER_REPLICATION_FACTOR: "${RF:-3}"
+      # Extra VM args, appended to the emulator at boot. Empty = stock BEAM defaults.
+      ERL_ZFLAGS: "${ERL_ZFLAGS:-}"
+    networks: [aether]
+
+networks:
+  aether: {}
