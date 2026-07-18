@@ -41,6 +41,52 @@ defmodule AetherS3.RouterTest do
     assert call(conn(:get, "/#{bucket}/hello.txt")).status == 404
   end
 
+  test "aws-chunked upload is de-framed, not stored verbatim", %{bucket: bucket} do
+    assert call(conn(:put, "/#{bucket}")).status == 200
+
+    data = :crypto.strong_rand_bytes(20_000)
+    framed = aws_chunk(data, 8192)
+    # Sanity: the wire body is larger than the object (that's the framing we must strip).
+    assert byte_size(framed) > byte_size(data)
+
+    put =
+      conn(:put, "/#{bucket}/blob.bin", framed)
+      |> put_req_header("content-encoding", "aws-chunked")
+      |> put_req_header("x-amz-content-sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+      |> put_req_header("x-amz-decoded-content-length", Integer.to_string(byte_size(data)))
+      |> call()
+
+    assert put.status == 200
+    # etag is the md5 of the *decoded* object, not the framed wire bytes.
+    expected_etag = data |> :erlang.md5() |> Base.encode16(case: :lower)
+    assert get_resp_header(put, "etag") == [~s("#{expected_etag}")]
+
+    get = call(conn(:get, "/#{bucket}/blob.bin"))
+    assert get.status == 200
+    assert get.resp_body == data
+
+    # HEAD reports the stored size — the decoded length, not the framed wire size.
+    head = call(conn(:head, "/#{bucket}/blob.bin"))
+    assert get_resp_header(head, "content-length") == [Integer.to_string(byte_size(data))]
+  end
+
+  # Minimal unsigned aws-chunked framer for tests (mirrors what SDK clients send).
+  defp aws_chunk(data, size) do
+    body =
+      data
+      |> chunks(size)
+      |> Enum.map_join(fn part -> "#{Integer.to_string(byte_size(part), 16)}\r\n#{part}\r\n" end)
+
+    body <> "0\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n"
+  end
+
+  defp chunks(bin, n) when byte_size(bin) <= n, do: [bin]
+
+  defp chunks(bin, n) do
+    <<head::binary-size(n), rest::binary>> = bin
+    [head | chunks(rest, n)]
+  end
+
   test "LIST v2: prefix, delimiter, and continuation-token pagination", %{bucket: bucket} do
     call(conn(:put, "/#{bucket}"))
 

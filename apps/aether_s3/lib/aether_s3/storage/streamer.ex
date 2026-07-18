@@ -1,5 +1,5 @@
 defmodule AetherS3.Storage.Streamer do
-  alias AetherS3.Storage.{BlobStore, Multipart}
+  alias AetherS3.Storage.{AwsChunked, BlobStore, Multipart}
 
   @chunk 1_000_000
 
@@ -14,7 +14,13 @@ defmodule AetherS3.Storage.Streamer do
     {:ok, fd} = :file.open(path, [:write, :raw, :binary])
 
     try do
-      do_ingest(conn, fd, :crypto.hash_init(:md5), 0)
+      if AwsChunked.encoded?(conn) do
+        # Modern SDKs (aws-cli v2, AWS SDK v2, minio-go) frame the body as
+        # aws-chunked; de-frame it so we store the object, not the framing.
+        do_ingest_chunked(conn, fd, :crypto.hash_init(:md5), 0, AwsChunked.new())
+      else
+        do_ingest(conn, fd, :crypto.hash_init(:md5), 0)
+      end
     after
       :file.close(fd)
     end
@@ -36,6 +42,36 @@ defmodule AetherS3.Storage.Streamer do
           |> Base.encode16(case: :lower)
 
         {:ok, %{size: size + byte_size(chunk), etag: etag}, conn}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Same read loop, but each raw segment is de-framed first; only decoded object
+  # bytes are written and hashed, so size/etag reflect the real object.
+  defp do_ingest_chunked(conn, fd, md5_ctx, size, dec) do
+    case Plug.Conn.read_body(conn, length: @chunk) do
+      {:more, raw, conn} ->
+        with {:ok, data, dec} <- AwsChunked.decode(dec, raw) do
+          :ok = :file.write(fd, data)
+          n = IO.iodata_length(data)
+          do_ingest_chunked(conn, fd, :crypto.hash_update(md5_ctx, data), size + n, dec)
+        end
+
+      {:ok, raw, conn} ->
+        with {:ok, data, _dec} <- AwsChunked.decode(dec, raw) do
+          :ok = :file.write(fd, data)
+          n = IO.iodata_length(data)
+
+          etag =
+            md5_ctx
+            |> :crypto.hash_update(data)
+            |> :crypto.hash_final()
+            |> Base.encode16(case: :lower)
+
+          {:ok, %{size: size + n, etag: etag}, conn}
+        end
 
       {:error, reason} ->
         {:error, reason}
