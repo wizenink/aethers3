@@ -29,6 +29,8 @@ services:
       AETHER_REPLICATION_FACTOR: "${RF:-3}"
       # Extra VM args, appended to the emulator at boot. Empty = stock BEAM defaults.
       ERL_ZFLAGS: "${ERL_ZFLAGS:-}"
+      # Object-metadata durability: group (group-commit, default) | each (fsync/write).
+      AETHER_OBJMETA_SYNC: "${OBJMETA_SYNC:-group}"
     networks: [aether]
 
 networks:

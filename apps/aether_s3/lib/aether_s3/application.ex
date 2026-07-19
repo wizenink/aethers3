@@ -13,11 +13,10 @@ defmodule AetherS3.Application do
           # Metrics first, so its telemetry handlers are attached before any
           # request or measurement fires.
           {AetherS3.Telemetry, []},
-          {AetherS3.Cluster.RingServer, name: AetherS3.Cluster.RingServer},
-          Supervisor.child_spec(
-            {CubDB, data_dir: Path.join(data_dir, "objmeta"), name: AetherS3.ObjectMeta.DB},
-            id: :objmeta_db
-          ),
+          {AetherS3.Cluster.RingServer, name: AetherS3.Cluster.RingServer}
+        ] ++
+        objmeta_children(data_dir) ++
+        [
           # Read-through cache for hot CP lookups (creds/identity/bucket/groups) —
           # up before Khepri so the first request's misses just fall through.
           {AetherS3.ControlPlane.Cache, []},
@@ -33,6 +32,30 @@ defmodule AetherS3.Application do
         ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: AetherS3.Supervisor)
+  end
+
+  # The object-metadata store (CubDB), plus — in :group mode — the group-commit
+  # coordinator. `:group` (default) opens CubDB without per-write fsync and lets
+  # AetherS3.ObjectMeta.GroupCommit batch one fsync across concurrent writers
+  # (same durability as per-write fsync — a put returns only once on disk — but
+  # far higher throughput). `:each` restores CubDB's per-write fsync (no
+  # coordinator), the legacy behaviour.
+  defp objmeta_children(data_dir) do
+    sync = Application.get_env(:aether_s3, :objmeta_sync, :group)
+
+    cubdb =
+      Supervisor.child_spec(
+        {CubDB,
+         data_dir: Path.join(data_dir, "objmeta"),
+         name: AetherS3.ObjectMeta.DB,
+         auto_file_sync: sync == :each},
+        id: :objmeta_db
+      )
+
+    case sync do
+      :group -> [cubdb, AetherS3.ObjectMeta.GroupCommit]
+      _ -> [cubdb]
+    end
   end
 
   # Serve the S3 API over HTTPS when a cert + key are configured, else plain HTTP

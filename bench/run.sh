@@ -29,6 +29,7 @@ AUTH="${AUTH:-false}"
 DURATION="${DURATION:-60s}"
 WORKLOAD="${WORKLOAD:-mixed}"
 ERL_ZFLAGS="${ERL_ZFLAGS:-}"
+OBJMETA_SYNC="${OBJMETA_SYNC:-group}"
 LABEL="${LABEL:-baseline}"
 COOKIE="${COOKIE:-bench-cluster}"
 KEEP="${KEEP:-0}"
@@ -38,7 +39,7 @@ ELIXIR_IMAGE="${ELIXIR_IMAGE:-elixir:1.20-otp-29-alpine}"
 ACCESS_KEY="${ACCESS_KEY:-AKIAEXAMPLE}"
 SECRET_KEY="${SECRET_KEY:-devsecret}"
 
-export IMAGE COOKIE AUTH ACCESS_KEY SECRET_KEY WQ RF ERL_ZFLAGS
+export IMAGE COOKIE AUTH ACCESS_KEY SECRET_KEY WQ RF ERL_ZFLAGS OBJMETA_SYNC
 
 PROJECT="aetherbench"
 NET="${PROJECT}_aether"
@@ -119,6 +120,7 @@ docker run --rm --network "$NET" -v "$PWD":/bench -w /bench "$ELIXIR_IMAGE" \
   echo "- nodes: $NODES   RF: $RF   WQ: $WQ   auth: $AUTH"
   echo "- workload: \`$OP $WARP_ARGS\`   duration: $DURATION"
   echo "- ERL_ZFLAGS: \`${ERL_ZFLAGS:-<stock defaults>}\`"
+  echo "- objmeta_sync: $OBJMETA_SYNC"
   echo "- image: $IMAGE"
   echo
   echo "## warp (throughput + latency)"

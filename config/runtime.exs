@@ -123,6 +123,15 @@ if aether_s3_present? and config_env() != :test do
          :write_quorum,
          AetherS3.Config.write_quorum(System.get_env("AETHER_WRITE_QUORUM", "1"))
 
+  # Object-metadata write durability. `group` (default) group-commits: writes
+  # don't fsync individually, but a put blocks until a batched fsync makes it
+  # durable — same durability as per-write fsync (no acked-then-lost window),
+  # much higher throughput under concurrency. `each` restores CubDB's legacy
+  # per-write fsync.
+  config :aether_s3,
+         :objmeta_sync,
+         if(System.get_env("AETHER_OBJMETA_SYNC") == "each", do: :each, else: :group)
+
   # Control-plane read cache TTL, in MILLISECONDS (default 1000). Fronts the hot
   # per-request CP lookups (creds/identity/bucket/groups) so an authenticated object
   # request skips a leader round-trip and survives a brief CP outage (serving the
