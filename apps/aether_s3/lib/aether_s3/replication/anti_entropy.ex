@@ -51,7 +51,17 @@ defmodule AetherS3.Replication.AntiEntropy do
       with {:ok, remote} <- fetch(replica, bucket, key),
            true <- Conflict.supersedes?(local_meta, remote) do
         Logger.info("anti-entropy: repairing #{bucket}/#{key} → #{replica}")
-        Coordinator.push_object(replica, bucket, key, local_meta)
+
+        # Root span so the push_object/receiver spans this triggers form one
+        # coherent background trace instead of orphaned, rootless spans.
+        AetherS3.Tracing.span(
+          "anti_entropy.repair",
+          %{bucket: bucket, "peer.node": to_string(replica)},
+          fn ->
+            Coordinator.push_object(replica, bucket, key, local_meta)
+          end
+        )
+
         :telemetry.execute([:aether, :anti_entropy, :repair], %{count: 1}, %{})
       end
     end)
