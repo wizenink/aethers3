@@ -12,18 +12,21 @@ defmodule AetherS3.Storage.Streamer do
   def ingest(conn, path) do
     File.mkdir_p!(Path.dirname(path))
     {:ok, fd} = :file.open(path, [:write, :raw, :binary])
+    chunked? = AwsChunked.encoded?(conn)
 
-    try do
-      if AwsChunked.encoded?(conn) do
-        # Modern SDKs (aws-cli v2, AWS SDK v2, minio-go) frame the body as
-        # aws-chunked; de-frame it so we store the object, not the framing.
-        do_ingest_chunked(conn, fd, :crypto.hash_init(:md5), 0, AwsChunked.new())
-      else
-        do_ingest(conn, fd, :crypto.hash_init(:md5), 0)
+    AetherS3.Tracing.span("storage.ingest", %{"aws.chunked": chunked?}, fn ->
+      try do
+        if chunked? do
+          # Modern SDKs (aws-cli v2, AWS SDK v2, minio-go) frame the body as
+          # aws-chunked; de-frame it so we store the object, not the framing.
+          do_ingest_chunked(conn, fd, :crypto.hash_init(:md5), 0, AwsChunked.new())
+        else
+          do_ingest(conn, fd, :crypto.hash_init(:md5), 0)
+        end
+      after
+        :file.close(fd)
       end
-    after
-      :file.close(fd)
-    end
+    end)
   end
 
   defp do_ingest(conn, fd, md5_ctx, size) do
@@ -79,6 +82,10 @@ defmodule AetherS3.Storage.Streamer do
   end
 
   def egress(conn, path, opts \\ []) do
+    AetherS3.Tracing.span("storage.egress", %{}, fn -> do_egress(conn, path, opts) end)
+  end
+
+  defp do_egress(conn, path, opts) do
     total = File.stat!(path).size
 
     {status, start, length, conn} =
@@ -135,6 +142,12 @@ defmodule AetherS3.Storage.Streamer do
   `total` is the object size (we already have it from the located metadata).
   """
   def egress_remote(conn, node, bucket, key, total, opts \\ []) do
+    AetherS3.Tracing.span("storage.egress_remote", %{"peer.node": to_string(node)}, fn ->
+      do_egress_remote(conn, node, bucket, key, total, opts)
+    end)
+  end
+
+  defp do_egress_remote(conn, node, bucket, key, total, opts) do
     {status, start, length, conn} =
       case parse_range(Keyword.get(opts, :range), total) do
         :none ->

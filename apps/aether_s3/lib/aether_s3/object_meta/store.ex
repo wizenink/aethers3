@@ -4,7 +4,12 @@ defmodule AetherS3.ObjectMeta.Store do
 
   @impl AetherS3.ObjectMeta
   def put(bucket, key, meta) do
-    CubDB.put(@db, {bucket, key}, meta)
+    # Spanned because this is the write-path bottleneck: CubDB fsyncs on every
+    # put (auto_file_sync) through a single writer, so under load this is where
+    # PUT latency accumulates.
+    AetherS3.Tracing.span("objmeta.put", %{bucket: bucket}, fn ->
+      CubDB.put(@db, {bucket, key}, meta)
+    end)
   end
 
   @impl AetherS3.ObjectMeta

@@ -34,7 +34,14 @@ defmodule AetherS3.MixProject do
       {:libcluster, "~> 3.5"},
       {:toml, "~> 0.7"},
       {:telemetry_metrics_prometheus_core, "~> 1.1"},
-      {:telemetry_poller, "~> 1.1"}
+      {:telemetry_poller, "~> 1.1"},
+      # Distributed tracing (OpenTelemetry). Exporter is inert unless
+      # OTEL_EXPORTER_OTLP_ENDPOINT is set (see runtime.exs), so this adds no
+      # overhead by default.
+      {:opentelemetry_api, "~> 1.4"},
+      {:opentelemetry, "~> 1.5"},
+      {:opentelemetry_exporter, "~> 1.8"},
+      {:opentelemetry_bandit, "~> 0.2"}
     ]
   end
 end

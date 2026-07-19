@@ -54,13 +54,15 @@ defmodule AetherS3.Replication.Coordinator do
 
             emit_put(bucket, size, "ok")
 
-            Task.start(fn ->
-              Enum.each(replicas -- succeeded, fn t ->
-                replicate_to(t, bucket, key, final, meta)
-              end)
+            Task.start(
+              AetherS3.Tracing.bind(fn ->
+                Enum.each(replicas -- succeeded, fn t ->
+                  replicate_to(t, bucket, key, final, meta)
+                end)
 
-              unless Node.self() in replicas, do: File.rm(final)
-            end)
+                unless Node.self() in replicas, do: File.rm(final)
+              end)
+            )
 
             {:ok, etag, conn}
 
@@ -117,24 +119,42 @@ defmodule AetherS3.Replication.Coordinator do
     if File.exists?(BlobStore.path(bucket, key)) do
       push_blob(target, bucket, key, meta)
     else
-      :erpc.call(target, Receiver, :commit, [bucket, key, meta])
+      AetherS3.Tracing.rpc(
+        target,
+        "receiver.commit",
+        %{bucket: bucket},
+        {Receiver, :commit, [bucket, key, meta]}
+      )
     end
   end
 
   def push_blob(target, bucket, key, meta) do
-    staged = BlobStore.path(bucket, key)
-    # unique per-push token so the target stages to its own temp file; concurrent
-    # pushes to the same key can't interleave (each renames atomically on finish).
-    token = rand_token()
-    :ok = :erpc.call(target, Receiver, :begin, [bucket, key, token])
+    AetherS3.Tracing.span(
+      "replica.push_blob",
+      %{"peer.node": to_string(target), bytes: meta.size},
+      fn ->
+        staged = BlobStore.path(bucket, key)
+        # unique per-push token so the target stages to its own temp file; concurrent
+        # pushes to the same key can't interleave (each renames atomically on finish).
+        token = rand_token()
+        :ok = :erpc.call(target, Receiver, :begin, [bucket, key, token])
 
-    staged
-    |> File.stream!(@chunk)
-    |> Enum.each(fn chunk ->
-      :ok = :erpc.call(target, Receiver, :write_chunk, [bucket, key, token, chunk])
-    end)
+        staged
+        |> File.stream!(@chunk)
+        |> Enum.each(fn chunk ->
+          :ok = :erpc.call(target, Receiver, :write_chunk, [bucket, key, token, chunk])
+        end)
 
-    :erpc.call(target, Receiver, :finish, [bucket, key, token, meta])
+        # Terminal commit routed through a propagated client+server span, so the
+        # replica node records the persist as a child of this push.
+        AetherS3.Tracing.rpc(
+          target,
+          "receiver.finish",
+          %{bucket: bucket},
+          {Receiver, :finish, [bucket, key, token, meta]}
+        )
+      end
+    )
   rescue
     e ->
       Logger.warning("push_blob to #{target} failed: #{inspect(e)}")
@@ -166,26 +186,32 @@ defmodule AetherS3.Replication.Coordinator do
   with `Task.async_stream` to bound read latency to the slowest single replica.
   """
   def locate_repair(bucket, key) do
-    replicas = RingServer.replicas("#{bucket}/#{key}")
-    results = Enum.map(replicas, fn node -> {node, get_meta_from(node, bucket, key)} end)
+    AetherS3.Tracing.span("coordinator.locate", %{bucket: bucket}, fn ->
+      replicas = RingServer.replicas("#{bucket}/#{key}")
+      results = Enum.map(replicas, fn node -> {node, get_meta_from(node, bucket, key)} end)
 
-    case plan(replicas, results) do
-      :not_found ->
-        :not_found
+      case plan(replicas, results) do
+        :not_found ->
+          :not_found
 
-      {winner_node, winner_meta, targets} ->
-        :telemetry.execute([:aether, :object, :read], %{count: 1}, %{})
+        {winner_node, winner_meta, targets} ->
+          :telemetry.execute([:aether, :object, :read], %{count: 1}, %{})
 
-        unless targets == [] do
-          :telemetry.execute([:aether, :read_repair], %{count: length(targets)}, %{})
+          unless targets == [] do
+            :telemetry.execute([:aether, :read_repair], %{count: length(targets)}, %{})
 
-          Task.start(fn ->
-            Enum.each(targets, fn t -> repair_one(winner_node, t, bucket, key, winner_meta) end)
-          end)
-        end
+            Task.start(
+              AetherS3.Tracing.bind(fn ->
+                Enum.each(targets, fn t ->
+                  repair_one(winner_node, t, bucket, key, winner_meta)
+                end)
+              end)
+            )
+          end
 
-        {:ok, winner_meta, winner_node}
-    end
+          {:ok, winner_meta, winner_node}
+      end
+    end)
   end
 
   @doc """
@@ -337,7 +363,12 @@ defmodule AetherS3.Replication.Coordinator do
   end
 
   defp get_meta_from(node, bucket, key) do
-    :erpc.call(node, AetherS3.ObjectMeta.Store, :get, [bucket, key])
+    AetherS3.Tracing.rpc(
+      node,
+      "objmeta.get",
+      %{bucket: bucket},
+      {ObjectMeta, :get, [bucket, key]}
+    )
   rescue
     # Unreachable / RPC failure — state UNKNOWN, distinct from a reachable :not_found.
     # Read-repair must not treat "unknown" as "absent" and push over a newer copy.

@@ -27,6 +27,46 @@ every node and aggregating in PromQL (e.g. `sum(aether_cluster_objects)`, or
 without Prometheus, `GET /cluster` returns every node's view in one JSON
 document.
 
+## Distributed tracing (OpenTelemetry)
+
+Metrics tell you aggregate rates and latencies; tracing tells you where a *single*
+request spent its time — including the work it fanned out to other nodes. AetherS3
+emits OpenTelemetry spans for the S3 write path and propagates trace context across
+the replication hop, so one PUT is a single trace spanning every node it touched.
+
+**Off by default, zero cost.** Tracing is inert unless an OTLP endpoint is set —
+no spans, no sampling, no context injection on the hot path. Enable it by pointing
+at an OTLP/HTTP collector:
+
+| Env | Meaning |
+| --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP collector base URL (e.g. `http://collector:4318`). Setting it turns tracing on. |
+| `OTEL_SERVICE_NAME` | Service name in the trace UI (default `aether_s3`). |
+| `OTEL_TRACES_SAMPLER_ARG` | Head sampling ratio `0.0`–`1.0` for production; unset samples every trace. |
+
+A PUT produces this span tree (the last span runs on the *replica* node, linked
+into the same trace):
+
+```
+PUT                       inbound S3 request
+├─ storage.ingest         read + checksum + write the body
+└─ replica.push_blob      synchronous replica push (one per quorum replica)
+   └─ receiver.finish     the replica's persist — a SERVER span on that node
+```
+
+The cross-node link is deliberate: `:erpc` runs the callee in a fresh process on
+the remote node with none of the caller's context, so `AetherS3.Tracing.rpc/4`
+injects the active context into a W3C carrier, ships it as an argument, and
+re-attaches it on the far side before opening the span. Without that, the
+replica's work would be an orphan trace.
+
+**View it locally:** `bench/compose.tracing.yml` boots a traced cluster wired to
+an all-in-one Jaeger — `docker compose -f bench/compose.tracing.yml up -d --scale
+aether=3`, send an S3 request, and open <http://localhost:16686>.
+
+Scope today: the synchronous (quorum) replica pushes are traced; best-effort
+background replication and the admin port are not yet instrumented.
+
 ## Telemetry showcase (Prometheus + Grafana)
 
 A self-contained stack — a 3-node cluster plus Prometheus (scraping every node's

@@ -6,6 +6,11 @@ config :logger, :default_formatter, format: "$time $node [$level] $message\n"
 # and live on a running node via AetherS3.Config.set_log_level/1.
 config :logger, level: :info
 
+# Distributed tracing (OpenTelemetry) is off by default — no sampling, no export,
+# zero hot-path cost. runtime.exs turns on OTLP export when
+# OTEL_EXPORTER_OTLP_ENDPOINT is set.
+config :opentelemetry, traces_exporter: :none, sampler: :always_off
+
 # Test environment: isolate data on disk and skip SigV4 so router tests can
 # exercise S3 semantics directly. Auth correctness has dedicated unit tests
 # (test/aether_s3/auth/sigv4_test.exs) against the AWS reference vector.
