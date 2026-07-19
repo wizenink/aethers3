@@ -4,7 +4,11 @@ defmodule AetherS3.ObjectMeta.Store do
 
   @impl AetherS3.ObjectMeta
   def put(bucket, key, meta) do
-    CubDB.put(@db, {bucket, key}, meta)
+    :ok = CubDB.put(@db, {bucket, key}, meta)
+    # Block until the write is durable. In group-commit mode this coalesces the
+    # fsync with other in-flight writers; in :each mode CubDB already fsynced and
+    # this returns immediately.
+    AetherS3.ObjectMeta.GroupCommit.sync()
   end
 
   @impl AetherS3.ObjectMeta
