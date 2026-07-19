@@ -12,4 +12,13 @@ fi
 
 echo "[entrypoint] starting as RELEASE_NODE=${RELEASE_NODE:-$AETHER_NODE}"
 
+# Tag every trace span with this node's identity so a distributed trace shows
+# WHICH node ran each span (service.instance.id, shown as a Process tag). Only
+# matters when tracing is enabled; harmless otherwise. Preserves any attrs the
+# operator already set.
+NODE="${RELEASE_NODE:-$AETHER_NODE}"
+if [ -n "$NODE" ]; then
+  export OTEL_RESOURCE_ATTRIBUTES="service.instance.id=${NODE}${OTEL_RESOURCE_ATTRIBUTES:+,${OTEL_RESOURCE_ATTRIBUTES}}"
+fi
+
 exec /app/bin/aether_s3 "$@"
