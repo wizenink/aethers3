@@ -1,5 +1,23 @@
 import Config
 
+# ── Distributed tracing (OpenTelemetry). Off unless an OTLP endpoint is given.
+# Set OTEL_EXPORTER_OTLP_ENDPOINT (e.g. http://collector:4318) to export traces
+# over OTLP/HTTP. OTEL_TRACES_SAMPLER_ARG (0.0–1.0) ratio-samples in production;
+# default samples every trace (fine for dev / low volume).
+if otlp = System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT") do
+  sampler =
+    case System.get_env("OTEL_TRACES_SAMPLER_ARG") do
+      nil -> {:parent_based, %{root: :always_on}}
+      ratio -> {:parent_based, %{root: {:trace_id_ratio_based, String.to_float(ratio)}}}
+    end
+
+  config :opentelemetry, traces_exporter: :otlp, sampler: sampler, span_processor: :batch
+
+  config :opentelemetry_exporter,
+    otlp_protocol: :http_protobuf,
+    otlp_endpoint: otlp
+end
+
 # ── aether_console (web UI): admin base URLs to read live cluster state from.
 # Point it at a real cluster, e.g. AETHER_CONSOLE_NODES=http://host1:9001,http://host2:9001
 config :aether_console,

@@ -4,11 +4,14 @@ defmodule AetherS3.ObjectMeta.Store do
 
   @impl AetherS3.ObjectMeta
   def put(bucket, key, meta) do
-    :ok = CubDB.put(@db, {bucket, key}, meta)
-    # Block until the write is durable. In group-commit mode this coalesces the
-    # fsync with other in-flight writers; in :each mode CubDB already fsynced and
-    # this returns immediately.
-    AetherS3.ObjectMeta.GroupCommit.sync()
+    # Trace the metadata write AND block until it is durable. In group-commit mode
+    # GroupCommit.sync/0 coalesces the fsync with other in-flight writers; in :each
+    # mode CubDB already fsynced and it returns immediately. The span wraps the
+    # sync too — that's where PUT latency accumulates under load.
+    AetherS3.Tracing.span("objmeta.put", %{bucket: bucket}, fn ->
+      :ok = CubDB.put(@db, {bucket, key}, meta)
+      AetherS3.ObjectMeta.GroupCommit.sync()
+    end)
   end
 
   @impl AetherS3.ObjectMeta
