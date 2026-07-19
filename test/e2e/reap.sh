@@ -46,7 +46,12 @@ awsd() {
 }
 
 rpc_on() {
-  docker exec -e RELEASE_NODE="aether@aether$1.aethr" "$(c "$1")" /app/bin/aether_s3 rpc "$2" 2>/dev/null | tail -1
+  # Strip interleaved Logger lines ($time $node [$level] $message) before taking
+  # the last line: an async log (e.g. "reaping abandoned multipart upload ...")
+  # can flush to stdout after the synchronous IO.puts result, and tail -1 would
+  # otherwise grab the log line instead of the rpc's actual output.
+  docker exec -e RELEASE_NODE="aether@aether$1.aethr" "$(c "$1")" /app/bin/aether_s3 rpc "$2" 2>/dev/null \
+    | grep -vE '\[(debug|info|notice|warning|error)\]' | tail -1
 }
 
 wait_log() {
