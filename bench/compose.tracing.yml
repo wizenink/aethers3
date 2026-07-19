@@ -1,0 +1,40 @@
+name: aethertrace
+
+# A traced AetherS3 cluster wired to an all-in-one Jaeger. Boot it, send an S3
+# request, and open http://localhost:16686 to see the distributed trace:
+# inbound PUT -> storage.ingest + replica.push_blob -> receiver.finish (on the
+# replica node, linked over :erpc).
+#
+#   docker compose -f compose.tracing.yml up -d --scale aether=3
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # Jaeger UI
+    networks: [aether]
+
+  aether:
+    image: ${IMAGE:-aether_s3:trace}
+    command: ["start"]
+    environment:
+      RELEASE_COOKIE: trace-cluster
+      RELEASE_DISTRIBUTION: name
+      AETHER_REQUIRE_AUTH: "false"
+      AETHER_NODE_BASENAME: aether
+      AETHER_DNS_QUERY: aether
+      AETHER_DATA_DIR: /data
+      AETHER_REPLICATION_FACTOR: "3"
+      # W=2 forces at least one *remote* replica push to be synchronous, so every
+      # PUT produces a cross-node span (with W=1 the coordinator can satisfy the
+      # quorum locally and replicate the rest asynchronously, untraced).
+      AETHER_WRITE_QUORUM: "2"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
+      OTEL_SERVICE_NAME: aether_s3
+      OTEL_BSP_SCHEDULE_DELAY: "500"
+    networks: [aether]
+    depends_on: [jaeger]
+
+networks:
+  aether: {}

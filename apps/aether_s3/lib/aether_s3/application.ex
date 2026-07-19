@@ -7,6 +7,10 @@ defmodule AetherS3.Application do
     port = Application.get_env(:aether_s3, :port, 9000)
     admin_port = Application.get_env(:aether_s3, :admin_port, 9001)
 
+    # Inbound S3 request spans (only when an OTLP exporter is configured — see
+    # AetherS3.Tracing / runtime.exs). Attaches Bandit telemetry handlers.
+    if AetherS3.Tracing.enabled?(), do: OpentelemetryBandit.setup()
+
     children =
       cluster_children() ++
         [
