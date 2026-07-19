@@ -5,11 +5,15 @@ import Config
 # over OTLP/HTTP. OTEL_TRACES_SAMPLER_ARG (0.0–1.0) ratio-samples in production;
 # default samples every trace (fine for dev / low volume).
 if otlp = System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT") do
-  sampler =
+  delegate =
     case System.get_env("OTEL_TRACES_SAMPLER_ARG") do
       nil -> {:parent_based, %{root: :always_on}}
       ratio -> {:parent_based, %{root: {:trace_id_ratio_based, String.to_float(ratio)}}}
     end
+
+  # Wrap the sampler so operational-probe endpoints (health/metrics/cluster
+  # scrapes) are dropped before they reach the backend.
+  sampler = {AetherS3.Tracing.Sampler, %{delegate: delegate}}
 
   config :opentelemetry, traces_exporter: :otlp, sampler: sampler, span_processor: :batch
 

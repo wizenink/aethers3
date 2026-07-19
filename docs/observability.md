@@ -64,8 +64,12 @@ replica's work would be an orphan trace.
 an all-in-one Jaeger — `docker compose -f bench/compose.tracing.yml up -d --scale
 aether=3`, send an S3 request, and open <http://localhost:16686>.
 
-Scope today: the synchronous (quorum) replica pushes are traced; best-effort
-background replication and the admin port are not yet instrumented.
+Every span is tagged with `service.instance.id` (the node name), so a distributed
+trace shows *which* node ran each span. Operational-probe endpoints
+(`/health`, `/ready`, `/metrics`, `/cluster`) are dropped by the sampler so
+Prometheus scrapes and health checks don't flood the backend; `/admin/*` and
+`/whoami` stay traced. Background convergence (anti-entropy repairs, read-repair)
+is traced too, under its own root span.
 
 ## Telemetry showcase (Prometheus + Grafana)
 
