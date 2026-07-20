@@ -192,3 +192,15 @@ jobs:
       # sweeps its parts + marker once past the age grace (and not before).
       - name: Run reap e2e
         run: bash test/e2e/reap.sh
+
+  e2e-warp:
+    name: E2E (warp concurrent workload)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Drives the cluster with warp (concurrent PUT/GET/STAT/DELETE). warp
+      # verifies size + etag on every read, so a run with zero errors proves
+      # real round-trip correctness under load. minio/warp is pulled at runtime.
+      - name: Run warp e2e
+        run: bash test/e2e/warp.sh
