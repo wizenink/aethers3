@@ -212,6 +212,12 @@ if aether_s3_present? and config_env() != :test do
       :ok
   end
 
+  # Read-time integrity verification: AETHER_VERIFY_READS=true verifies each full
+  # local GET's blob md5 against its etag while streaming, aborting the response
+  # and healing in the background on a mismatch. Off by default — whole-object md5
+  # on every read has a real CPU cost; the background scrub is the always-on guard.
+  config :aether_s3, :verify_reads, System.get_env("AETHER_VERIFY_READS") == "true"
+
   # Cluster discovery strategy, chosen per deployment:
   #   * AETHER_PEERS set      -> Epmd: connect to a static, comma-separated list of
   #     node names (stable-name deploys). Names must be resolvable; discovery IS

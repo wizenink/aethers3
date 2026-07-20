@@ -146,15 +146,39 @@ defmodule AetherS3.Storage.Streamer do
       |> Plug.Conn.put_resp_header("accept-ranges", "bytes")
       |> Plug.Conn.send_chunked(status)
 
-    path
-    |> stream_slice(start, length)
-    |> Enum.reduce_while(conn, fn bytes, conn ->
-      case Plug.Conn.chunk(conn, bytes) do
-        {:ok, conn} -> {:cont, conn}
-        {:error, :closed} -> {:halt, conn}
-      end
-    end)
+    # Read-time integrity verify: fold md5 over the streamed bytes and check it
+    # against the stored etag once the whole object has been sent. Only for full
+    # reads (`:verify_etag` set — the router omits it for ranged/partial reads,
+    # whose bytes can't be checked against the whole-object etag). Off = nil = no
+    # hashing, zero overhead.
+    verify = Keyword.get(opts, :verify_etag)
+
+    {conn, closed?, md5} =
+      path
+      |> stream_slice(start, length)
+      |> Enum.reduce_while({conn, false, md5_init(verify)}, fn bytes, {conn, _closed, ctx} ->
+        case Plug.Conn.chunk(conn, bytes) do
+          {:ok, conn} -> {:cont, {conn, false, md5_update(ctx, bytes)}}
+          {:error, :closed} -> {:halt, {conn, true, ctx}}
+        end
+      end)
+
+    # Verify only a fully-sent object (a client disconnect leaves the hash partial).
+    if verify && not closed? && md5_final(md5) != verify do
+      Keyword.get(opts, :on_corrupt, fn -> :ok end).()
+      :telemetry.execute([:aether, :read_verify, :fail], %{count: 1}, %{})
+      raise AetherS3.Storage.IntegrityError
+    end
+
+    conn
   end
+
+  defp md5_init(nil), do: nil
+  defp md5_init(_etag), do: :crypto.hash_init(:md5)
+  defp md5_update(nil, _bytes), do: nil
+  defp md5_update(ctx, bytes), do: :crypto.hash_update(ctx, bytes)
+  defp md5_final(nil), do: nil
+  defp md5_final(ctx), do: ctx |> :crypto.hash_final() |> Base.encode16(case: :lower)
 
   # Lazily stream `length` bytes starting at `start`, @chunk at a time, constant memory.
   defp stream_slice(path, start, length) do

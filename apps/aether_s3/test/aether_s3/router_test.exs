@@ -135,6 +135,49 @@ defmodule AetherS3.RouterTest do
     assert resp.resp_body =~ "NotImplemented"
   end
 
+  describe "read-time integrity verification (AETHER_VERIFY_READS)" do
+    setup do
+      prev = Application.get_env(:aether_s3, :verify_reads)
+      Application.put_env(:aether_s3, :verify_reads, true)
+
+      on_exit(fn ->
+        case prev do
+          nil -> Application.delete_env(:aether_s3, :verify_reads)
+          v -> Application.put_env(:aether_s3, :verify_reads, v)
+        end
+      end)
+
+      :ok
+    end
+
+    test "an intact object streams normally under verification", %{bucket: bucket} do
+      assert call(conn(:put, "/#{bucket}")).status == 200
+      assert text_put("/#{bucket}/ok.txt", "trustworthy bytes").status == 200
+
+      get = call(conn(:get, "/#{bucket}/ok.txt"))
+      assert get.status == 200
+      assert get.resp_body == "trustworthy bytes"
+    end
+
+    test "a corrupted blob aborts the read instead of serving it", %{bucket: bucket} do
+      assert call(conn(:put, "/#{bucket}")).status == 200
+      assert text_put("/#{bucket}/rot.txt", "the original bytes").status == 200
+
+      # Flip the blob on disk without touching the stored etag — pure bitrot.
+      File.write!(AetherS3.Storage.BlobStore.path(bucket, "rot.txt"), "the tampered bytes")
+
+      # The raise aborts the (already-started) chunked response — Plug wraps it, so
+      # unwrap to confirm it's the integrity failure. In production Bandit sees the
+      # exception mid-response and closes the connection without a terminating chunk.
+      error =
+        assert_raise Plug.Conn.WrapperError, fn ->
+          call(conn(:get, "/#{bucket}/rot.txt"))
+        end
+
+      assert %AetherS3.Storage.IntegrityError{} = error.reason
+    end
+  end
+
   test "LIST v2: prefix, delimiter, and continuation-token pagination", %{bucket: bucket} do
     call(conn(:put, "/#{bucket}"))
 
