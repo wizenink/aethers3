@@ -81,6 +81,47 @@ defmodule AetherS3.Storage.Streamer do
     end
   end
 
+  @doc """
+  Ingest a stored object's bytes into `path` for a server-side copy, computing
+  size + md5 etag like `ingest/2` — but the source is existing blobs, not a
+  request body. `segments` is `[{node, bucket, key, size}]`: one entry for a
+  regular object, or one per part for a multipart manifest, streamed in order
+  from each holder (local file or remote `:erpc`).
+  """
+  @spec ingest_source([{node(), String.t(), String.t(), non_neg_integer()}], String.t()) ::
+          {:ok, %{size: non_neg_integer(), etag: String.t()}} | {:error, term()}
+  def ingest_source(segments, path) do
+    AetherS3.Tracing.span("storage.ingest_source", %{segments: length(segments)}, fn ->
+      File.mkdir_p!(Path.dirname(path))
+      {:ok, fd} = :file.open(path, [:write, :raw, :binary])
+
+      try do
+        {size, md5} =
+          segments
+          |> Stream.flat_map(&segment_stream/1)
+          |> Enum.reduce({0, :crypto.hash_init(:md5)}, fn bytes, {size, ctx} ->
+            :ok = :file.write(fd, bytes)
+            {size + byte_size(bytes), :crypto.hash_update(ctx, bytes)}
+          end)
+
+        etag = md5 |> :crypto.hash_final() |> Base.encode16(case: :lower)
+        {:ok, %{size: size, etag: etag}}
+      rescue
+        e -> {:error, e}
+      after
+        :file.close(fd)
+      end
+    end)
+  end
+
+  defp segment_stream({node, bucket, key, size}) do
+    if node == Node.self() do
+      stream_slice(BlobStore.path(bucket, key), 0, size)
+    else
+      remote_slice(node, bucket, key, 0, size)
+    end
+  end
+
   def egress(conn, path, opts \\ []) do
     AetherS3.Tracing.span("storage.egress", %{}, fn -> do_egress(conn, path, opts) end)
   end

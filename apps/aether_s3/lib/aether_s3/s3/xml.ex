@@ -62,6 +62,14 @@ defmodule AetherS3.S3.XML do
     """
   end
 
+  @doc "CopyObject success body (server-side copy)."
+  def copy_object_result(etag, last_modified) do
+    """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <CopyObjectResult><LastModified>#{DateTime.to_iso8601(last_modified)}</LastModified><ETag>"#{etag}"</ETag></CopyObjectResult>
+    """
+  end
+
   def parse_complete(xml) do
     {:ok, {"CompleteMultipartUpload", _attrs, children}} = Saxy.SimpleForm.parse_string(xml)
 
