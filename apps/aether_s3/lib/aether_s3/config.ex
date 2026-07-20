@@ -83,6 +83,7 @@ defmodule AetherS3.Config do
     |> put(toml, "cp_evict_grace", :cp_evict_grace_ms, &(&1 * 1000))
     |> put(toml, "mpu_reap_age", :mpu_reap_age_ms, &(&1 * 1000))
     |> put(toml, "staging_sweep_age", :staging_sweep_age_ms, &(&1 * 1000))
+    |> put(toml, "scrub_interval", :scrub_interval_ms, &(&1 * 1000))
     |> put(toml, "write_quorum", :write_quorum, &write_quorum/1)
     |> put(toml, "require_auth", :require_auth)
     |> Enum.reverse()

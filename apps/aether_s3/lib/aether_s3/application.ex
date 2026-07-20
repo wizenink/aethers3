@@ -28,6 +28,8 @@ defmodule AetherS3.Application do
           {AetherS3.ControlPlane.Cluster, name: AetherS3.ControlPlane.Cluster},
           {AetherS3.Replication.AntiEntropy, name: AetherS3.Replication.AntiEntropy},
           {AetherS3.Replication.Reaper, name: AetherS3.Replication.Reaper},
+          # Opt-in bitrot scrub (returns :ignore unless AETHER_SCRUB_INTERVAL is set).
+          {AetherS3.Storage.Scrubber, []},
           {Bandit, s3_bandit_opts(port)},
           Supervisor.child_spec(
             {Bandit, plug: AetherS3.AdminRouter, scheme: :http, port: admin_port},
