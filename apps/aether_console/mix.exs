@@ -30,7 +30,7 @@ defmodule AetherConsole.MixProject do
   # cluster's admin/S3 APIs. No Ecto/DB — the console holds no state of its own.
   defp deps do
     [
-      {:phoenix, "~> 1.7.14"},
+      {:phoenix, "~> 1.8.9"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_view, "~> 1.0"},
       {:bandit, "~> 1.12"},
