@@ -116,6 +116,10 @@ defmodule AetherS3.Telemetry do
         measurement: :count,
         description: "Corrupt/missing blobs with no good replica (data loss)"
       ),
+      sum("aether.read_verify.fail.count",
+        measurement: :count,
+        description: "Full reads that failed read-time integrity verification"
+      ),
 
       # --- Multipart lifecycle ---
       sum("aether.multipart.initiated.count", measurement: :count),

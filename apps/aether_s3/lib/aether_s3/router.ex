@@ -174,7 +174,11 @@ defmodule AetherS3.Router do
           |> put_resp_header("last-modified", http_date(meta.last_modified))
 
         if node == Node.self() do
-          Streamer.egress(conn, BlobStore.path(bucket, key), range: range)
+          Streamer.egress(
+            conn,
+            BlobStore.path(bucket, key),
+            egress_opts(bucket, key, meta, range)
+          )
         else
           Streamer.egress_remote(conn, node, bucket, key, meta.size, range: range)
         end
@@ -187,6 +191,24 @@ defmodule AetherS3.Router do
           XML.error("NoSuchKey", "The specified key does not exist.", conn.request_path)
         )
     end
+  end
+
+  # Egress options for a local read. When AETHER_VERIFY_READS is on and this is a
+  # full read (no Range), ask the streamer to verify the blob's md5 against the
+  # stored etag as it streams, and heal it in the background on a mismatch. Ranged
+  # reads can't be checked against the whole-object etag, so they're never verified.
+  defp egress_opts(bucket, key, meta, range) do
+    if is_nil(range) and verify_reads?() and Map.has_key?(meta, :etag) do
+      [range: range, verify_etag: meta.etag, on_corrupt: fn -> heal_async(bucket, key, meta) end]
+    else
+      [range: range]
+    end
+  end
+
+  defp verify_reads?, do: Application.get_env(:aether_s3, :verify_reads, false)
+
+  defp heal_async(bucket, key, meta) do
+    Task.start(fn -> AetherS3.Storage.Scrubber.scrub_object(bucket, key, meta) end)
   end
 
   post "/:bucket/*key" do
