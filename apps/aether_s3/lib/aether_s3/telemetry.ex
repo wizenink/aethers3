@@ -106,6 +106,17 @@ defmodule AetherS3.Telemetry do
         description: "Orphaned staging temp files swept"
       ),
 
+      # --- Scrub (bitrot integrity) ---
+      sum("aether.scrub.ok.count", measurement: :count, description: "Blobs scrubbed intact"),
+      sum("aether.scrub.healed.count",
+        measurement: :count,
+        description: "Corrupt/missing blobs healed from a replica"
+      ),
+      sum("aether.scrub.unrecoverable.count",
+        measurement: :count,
+        description: "Corrupt/missing blobs with no good replica (data loss)"
+      ),
+
       # --- Multipart lifecycle ---
       sum("aether.multipart.initiated.count", measurement: :count),
       sum("aether.multipart.completed.count", measurement: :count),

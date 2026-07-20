@@ -199,6 +199,19 @@ if aether_s3_present? and config_env() != :test do
       :ok
   end
 
+  # Bitrot scrub is OPT-IN: set AETHER_SCRUB_INTERVAL to a number of SECONDS
+  # between full integrity passes. Each pass re-reads every local blob, compares
+  # its md5 to the stored etag, and heals a mismatch from a replica. Unset =
+  # disabled. Non-destructive (heal only replaces a bad copy with a verified one),
+  # so enabling it in production is safe; pick an interval that fits your data size.
+  case System.get_env("AETHER_SCRUB_INTERVAL") do
+    s when is_binary(s) and s != "" ->
+      config :aether_s3, :scrub_interval_ms, String.to_integer(s) * 1000
+
+    _ ->
+      :ok
+  end
+
   # Cluster discovery strategy, chosen per deployment:
   #   * AETHER_PEERS set      -> Epmd: connect to a static, comma-separated list of
   #     node names (stable-name deploys). Names must be resolvable; discovery IS
