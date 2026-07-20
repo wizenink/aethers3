@@ -262,6 +262,11 @@ defmodule AetherS3.Router do
         # the Authorize plug). x-amz-acl: private clears it (empty grants).
         respond_set_grants(conn, ControlPlane.set_scoped_grants(bucket, key, acl_grants(conn)))
 
+      match?([_ | _], get_req_header(conn, "x-amz-copy-source")) ->
+        # Server-side copy (aws s3 cp/mv): PUT dest + x-amz-copy-source, empty body.
+        # Without this the empty body would be stored as a 0-byte object.
+        copy_object(conn, bucket, key)
+
       true ->
         put_object(conn, bucket, key)
     end
@@ -337,6 +342,115 @@ defmodule AetherS3.Router do
             XML.error("NoSuchBucket", "The specified bucket does not exist.", conn.request_path)
           )
         end
+    end
+  end
+
+  defp copy_object(conn, dst_bucket, dst_key) do
+    source = parse_copy_source(conn)
+
+    cond do
+      Map.has_key?(conn.query_params, "partNumber") ->
+        # UploadPartCopy — not implemented; reject rather than store an empty part.
+        send_xml(
+          conn,
+          501,
+          XML.error("NotImplemented", "UploadPartCopy is not supported.", conn.request_path)
+        )
+
+      source == :invalid ->
+        send_xml(
+          conn,
+          400,
+          XML.error("InvalidArgument", "Malformed x-amz-copy-source header.", conn.request_path)
+        )
+
+      # The reserved multipart bucket isn't a client-visible source.
+      elem(source, 0) == Multipart.bucket() ->
+        send_xml(
+          conn,
+          404,
+          XML.error("NoSuchKey", "The specified copy source does not exist.", conn.request_path)
+        )
+
+      not ControlPlane.bucket_exists?(dst_bucket) ->
+        send_xml(
+          conn,
+          404,
+          XML.error("NoSuchBucket", "The specified bucket does not exist.", conn.request_path)
+        )
+
+      true ->
+        {src_bucket, src_key} = source
+
+        case Coordinator.copy(src_bucket, src_key, dst_bucket, dst_key, copy_content_type(conn)) do
+          {:ok, %{etag: etag, last_modified: last_modified}} ->
+            send_xml(conn, 200, XML.copy_object_result(etag, last_modified))
+
+          {:error, :no_such_key} ->
+            send_xml(
+              conn,
+              404,
+              XML.error(
+                "NoSuchKey",
+                "The specified copy source does not exist.",
+                conn.request_path
+              )
+            )
+
+          {:error, :missing_part} ->
+            send_xml(
+              conn,
+              500,
+              XML.error("InternalError", "The copy source is incomplete.", conn.request_path)
+            )
+
+          {:error, :insufficient_replicas} ->
+            send_xml(
+              conn,
+              503,
+              XML.error(
+                "ServiceUnavailable",
+                "Not enough replicas to store the copy.",
+                conn.request_path
+              )
+            )
+
+          {:error, _reason} ->
+            send_xml(
+              conn,
+              500,
+              XML.error("InternalError", "The copy could not be completed.", conn.request_path)
+            )
+        end
+    end
+  end
+
+  # Parse x-amz-copy-source ("/bucket/key" or "bucket/key", URL-encoded, optional
+  # ?versionId) into {bucket, key}, or :invalid.
+  defp parse_copy_source(conn) do
+    conn
+    |> get_req_header("x-amz-copy-source")
+    |> List.first("")
+    |> URI.decode()
+    |> String.trim_leading("/")
+    |> String.split("?", parts: 2)
+    |> List.first()
+    |> String.split("/", parts: 2)
+    |> case do
+      [bucket, key] when bucket != "" and key != "" -> {bucket, key}
+      _ -> :invalid
+    end
+  end
+
+  # metadata-directive: REPLACE takes the request's content-type; COPY (default)
+  # keeps the source's (nil -> Coordinator.copy uses the source meta's type).
+  defp copy_content_type(conn) do
+    case conn |> get_req_header("x-amz-metadata-directive") |> List.first() do
+      "REPLACE" ->
+        conn |> get_req_header("content-type") |> List.first() || "application/octet-stream"
+
+      _ ->
+        nil
     end
   end
 

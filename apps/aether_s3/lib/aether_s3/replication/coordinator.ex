@@ -12,69 +12,129 @@ defmodule AetherS3.Replication.Coordinator do
   @chunk 1_048_576
 
   def put(conn, bucket, key, content_type) do
-    replicas = RingServer.replicas("#{bucket}/#{key}")
     final = BlobStore.path(bucket, key)
     staged = "#{final}.#{rand_token()}.staging"
 
     case Streamer.ingest(conn, staged) do
       {:ok, %{size: size, etag: etag}, conn} ->
-        # Atomic local publish: concurrent PUTs of the same key each ingest their
-        # own temp, then rename — last writer wins, never an interleaved/corrupt
-        # blob, and a crash leaves an orphan temp instead of a half-written final.
-        :ok = File.rename(staged, final)
-
-        meta = %{
-          size: size,
-          etag: etag,
-          content_type: content_type,
-          last_modified: DateTime.utc_now(),
-          vv: bump_vv(bucket, key)
-        }
-
-        # Replicate to W replicas synchronously before acking; the rest go in the
-        # background. Individual replica failures don't crash the write — they just
-        # don't count toward W (and heal later via read-repair / anti-entropy).
-        #
-        # TODO: crash/partition orphans + failed replications still need an
-        # anti-entropy reaper (sweep blobs lacking local metadata + not HRW-owned).
-        # The cleaner long-term design is "route-to-primary": stream the body to the
-        # HRW primary, which stages and fans out, so bytes only land on replicas.
-        # W resolves against the replication factor (intended N), NOT the live
-        # replica count — otherwise losing replicas would silently shrink W and
-        # defeat the durability guarantee. If fewer than W live replicas exist,
-        # sync_replicate can't reach W and the write is rejected.
-        rf = Application.get_env(:aether_s3, :replication_factor, 3)
-        w = resolve_w(rf, Application.get_env(:aether_s3, :write_quorum, 1))
-
-        case sync_replicate(replicas, w, bucket, key, final, meta) do
-          {:ok, succeeded} ->
-            Logger.info(
-              "stored #{bucket}/#{key} (#{size}B etag=#{etag}) W=#{w} → #{inspect(succeeded)}"
-            )
-
-            emit_put(bucket, size, "ok")
-
-            Task.start(
-              AetherS3.Tracing.bind(fn ->
-                Enum.each(replicas -- succeeded, fn t ->
-                  replicate_to(t, bucket, key, final, meta)
-                end)
-
-                unless Node.self() in replicas, do: File.rm(final)
-              end)
-            )
-
-            {:ok, etag, conn}
-
-          {:error, :insufficient_replicas} ->
-            unless Node.self() in replicas, do: File.rm(final)
-            emit_put(bucket, 0, "insufficient_replicas")
-            {:error, :insufficient_replicas, conn}
+        case publish(bucket, key, staged, final, size, etag, content_type) do
+          {:ok, etag, _last_modified} -> {:ok, etag, conn}
+          {:error, :insufficient_replicas} -> {:error, :insufficient_replicas, conn}
         end
 
       {:error, reason} ->
         File.rm(staged)
         {:error, reason}
+    end
+  end
+
+  @doc """
+  Server-side copy: write a fresh, self-contained object at the destination from
+  the bytes of an existing source object. A regular object copies its blob; a
+  completed-multipart object is deep-copied by streaming its parts — so the copy
+  never shares parts with the source (a later delete of either is safe). The copy
+  gets a new etag (md5 of the full bytes), last_modified, and version vector.
+
+  `content_type` nil = keep the source's (S3 metadata-directive COPY); a value
+  overrides it (REPLACE).
+  """
+  def copy(src_bucket, src_key, dst_bucket, dst_key, content_type) do
+    case locate_repair(src_bucket, src_key) do
+      :not_found ->
+        {:error, :no_such_key}
+
+      {:ok, src_meta, src_node} ->
+        with {:ok, segments} <- source_segments(src_bucket, src_key, src_meta, src_node) do
+          final = BlobStore.path(dst_bucket, dst_key)
+          staged = "#{final}.#{rand_token()}.staging"
+          content_type = content_type || src_meta.content_type
+
+          case Streamer.ingest_source(segments, staged) do
+            {:ok, %{size: size, etag: etag}} ->
+              case publish(dst_bucket, dst_key, staged, final, size, etag, content_type) do
+                {:ok, etag, last_modified} -> {:ok, %{etag: etag, last_modified: last_modified}}
+                {:error, reason} -> {:error, reason}
+              end
+
+            {:error, reason} ->
+              File.rm(staged)
+              {:error, reason}
+          end
+        end
+    end
+  end
+
+  # The source object as an ordered list of blob segments {node, bucket, key, size}:
+  # one for a regular object, one per part for a multipart manifest (each part is a
+  # normal replicated object under the reserved bucket, located on its own holder).
+  defp source_segments(_bucket, _key, %{parts: parts}, _node) do
+    parts
+    |> Enum.reduce_while({:ok, []}, fn part, {:ok, acc} ->
+      case locate(Multipart.bucket(), part.key) do
+        {:ok, _meta, node} ->
+          {:cont, {:ok, [{node, Multipart.bucket(), part.key, part.size} | acc]}}
+
+        _ ->
+          {:halt, {:error, :missing_part}}
+      end
+    end)
+    |> case do
+      {:ok, segments} -> {:ok, Enum.reverse(segments)}
+      err -> err
+    end
+  end
+
+  defp source_segments(bucket, key, %{size: size}, node) do
+    {:ok, [{node, bucket, key, size}]}
+  end
+
+  # Publish a staged blob as the object at bucket/key: atomic rename to final,
+  # stamp meta, replicate to W replicas synchronously (rest in the background).
+  # Concurrent writes of the same key each stage their own temp then rename —
+  # last writer wins, never an interleaved/corrupt blob; a crash leaves an orphan
+  # temp, not a half-written final. W resolves against the replication factor
+  # (intended N), not the live replica count, so losing replicas can't shrink W.
+  # Returns {:ok, etag, last_modified} | {:error, :insufficient_replicas}.
+  defp publish(bucket, key, staged, final, size, etag, content_type) do
+    replicas = RingServer.replicas("#{bucket}/#{key}")
+    :ok = File.rename(staged, final)
+    last_modified = DateTime.utc_now()
+
+    meta = %{
+      size: size,
+      etag: etag,
+      content_type: content_type,
+      last_modified: last_modified,
+      vv: bump_vv(bucket, key)
+    }
+
+    rf = Application.get_env(:aether_s3, :replication_factor, 3)
+    w = resolve_w(rf, Application.get_env(:aether_s3, :write_quorum, 1))
+
+    case sync_replicate(replicas, w, bucket, key, final, meta) do
+      {:ok, succeeded} ->
+        Logger.info(
+          "stored #{bucket}/#{key} (#{size}B etag=#{etag}) W=#{w} → #{inspect(succeeded)}"
+        )
+
+        emit_put(bucket, size, "ok")
+
+        Task.start(
+          AetherS3.Tracing.bind(fn ->
+            Enum.each(replicas -- succeeded, fn t ->
+              replicate_to(t, bucket, key, final, meta)
+            end)
+
+            unless Node.self() in replicas, do: File.rm(final)
+          end)
+        )
+
+        {:ok, etag, last_modified}
+
+      {:error, :insufficient_replicas} ->
+        unless Node.self() in replicas, do: File.rm(final)
+        emit_put(bucket, 0, "insufficient_replicas")
+        {:error, :insufficient_replicas}
     end
   end
 

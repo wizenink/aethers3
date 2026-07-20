@@ -87,6 +87,54 @@ defmodule AetherS3.RouterTest do
     [head | chunks(rest, n)]
   end
 
+  test "CopyObject: x-amz-copy-source deep-copies a regular object", %{bucket: bucket} do
+    assert call(conn(:put, "/#{bucket}")).status == 200
+    body = "the quick brown fox jumps over the lazy dog"
+    assert text_put("/#{bucket}/src.txt", body).status == 200
+
+    copy =
+      conn(:put, "/#{bucket}/dst.txt")
+      |> put_req_header("x-amz-copy-source", "/#{bucket}/src.txt")
+      |> call()
+
+    assert copy.status == 200
+    assert copy.resp_body =~ "<CopyObjectResult>"
+    etag = body |> :erlang.md5() |> Base.encode16(case: :lower)
+    assert copy.resp_body =~ etag
+
+    get = call(conn(:get, "/#{bucket}/dst.txt"))
+    assert get.status == 200
+    assert get.resp_body == body
+
+    # Deep copy: the copy owns its own blob, so deleting the source can't affect it.
+    assert call(conn(:delete, "/#{bucket}/src.txt")).status == 204
+    assert call(conn(:get, "/#{bucket}/dst.txt")).resp_body == body
+  end
+
+  test "CopyObject: missing source is 404 NoSuchKey", %{bucket: bucket} do
+    assert call(conn(:put, "/#{bucket}")).status == 200
+
+    copy =
+      conn(:put, "/#{bucket}/dst.txt")
+      |> put_req_header("x-amz-copy-source", "/#{bucket}/ghost.txt")
+      |> call()
+
+    assert copy.status == 404
+    assert copy.resp_body =~ "NoSuchKey"
+  end
+
+  test "CopyObject: UploadPartCopy (partNumber) is 501, not a 0-byte part", %{bucket: bucket} do
+    assert call(conn(:put, "/#{bucket}")).status == 200
+
+    resp =
+      conn(:put, "/#{bucket}/dst?partNumber=1&uploadId=abc")
+      |> put_req_header("x-amz-copy-source", "/#{bucket}/src")
+      |> call()
+
+    assert resp.status == 501
+    assert resp.resp_body =~ "NotImplemented"
+  end
+
   test "LIST v2: prefix, delimiter, and continuation-token pagination", %{bucket: bucket} do
     call(conn(:put, "/#{bucket}"))
 
