@@ -31,8 +31,11 @@ defmodule AetherS3.AdminRouterTest do
   end
 
   test "GET /ready/cp is 503 when the leader-routed probe can't commit" do
-    Application.put_env(:aether_s3, :ready_probe_timeout, 0)
-    on_exit(fn -> Application.delete_env(:aether_s3, :ready_probe_timeout) end)
+    # Point the probe at a store that doesn't exist so the read reliably fails.
+    # (A 0-timeout was racy — a warmed-up consistency read can resolve instantly,
+    # so it intermittently returned 200; this flaked in CI.)
+    Application.put_env(:aether_s3, :ready_probe_store, :__no_such_store__)
+    on_exit(fn -> Application.delete_env(:aether_s3, :ready_probe_store) end)
 
     conn = request(:get, "/ready/cp")
     assert conn.status == 503

@@ -114,11 +114,16 @@ defmodule AetherS3.AdminRouter do
   # commits only if a reachable leader holds quorum, so a phantom leader or lost
   # quorum reads as NOT ready (a cached leaderboard lookup would lie).
   defp cp_ready? do
+    store = Application.get_env(:aether_s3, :ready_probe_store, :khepri)
     timeout = Application.get_env(:aether_s3, :ready_probe_timeout, @ready_probe_default_ms)
 
-    case :khepri.exists(:khepri, [:buckets], %{favor: :consistency, timeout: timeout}) do
+    case :khepri.exists(store, [:buckets], %{favor: :consistency, timeout: timeout}) do
       result when is_boolean(result) -> true
       _ -> false
     end
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
   end
 end
