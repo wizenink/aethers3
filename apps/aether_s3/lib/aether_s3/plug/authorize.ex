@@ -85,6 +85,13 @@ defmodule AetherS3.Plug.Authorize do
       method == "DELETE" ->
         owner_only?(identity, bucket)
 
+      method == "POST" ->
+        # Bulk delete (DeleteObjects) — the keys aren't parsed yet, so gate on
+        # bucket-wide write (owner/admin or a bucket-wide :write grant). Identities
+        # with only narrower per-key grants use individual DELETEs (per-key gated);
+        # per-key authz for bulk delete is a follow-up.
+        granted_bucket?(identity, bucket, :write)
+
       true ->
         false
     end

@@ -80,6 +80,32 @@ defmodule AetherS3.S3.XML do
     end
   end
 
+  @doc "Parse a DeleteObjects request body into `{keys, quiet?}`."
+  def parse_delete(xml) do
+    {:ok, {"Delete", _attrs, children}} = Saxy.SimpleForm.parse_string(xml)
+    quiet = field(children, "Quiet") == "true"
+    keys = for {"Object", _attrs, obj} <- children, do: field(obj, "Key")
+    {Enum.reject(keys, &is_nil/1), quiet}
+  end
+
+  @doc """
+  Render a DeleteObjects result: a `<Deleted>` per success (omitted in quiet mode)
+  and an `<Error>` per failure. `errors` is `[{key, code, message}]`.
+  """
+  def delete_result(deleted, errors) do
+    deleted_xml = Enum.map_join(deleted, "", &"<Deleted><Key>#{escape(&1)}</Key></Deleted>")
+
+    errors_xml =
+      Enum.map_join(errors, "", fn {key, code, message} ->
+        "<Error><Key>#{escape(key)}</Key><Code>#{code}</Code><Message>#{escape(message)}</Message></Error>"
+      end)
+
+    """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <DeleteResult xmlns="#{@ns}">#{deleted_xml}#{errors_xml}</DeleteResult>
+    """
+  end
+
   defp field(children, tag) do
     Enum.find_value(children, fn
       {^tag, _attrs, [text]} -> text

@@ -178,6 +178,61 @@ defmodule AetherS3.RouterTest do
     end
   end
 
+  test "DeleteObjects: bulk delete removes the listed keys (idempotent)", %{bucket: bucket} do
+    assert call(conn(:put, "/#{bucket}")).status == 200
+
+    for k <- ["a.txt", "b.txt", "c.txt"],
+        do: assert(text_put("/#{bucket}/#{k}", "x").status == 200)
+
+    body =
+      "<Delete><Object><Key>a.txt</Key></Object><Object><Key>b.txt</Key></Object>" <>
+        "<Object><Key>ghost.txt</Key></Object></Delete>"
+
+    resp =
+      conn(:post, "/#{bucket}?delete", body)
+      |> put_req_header("content-type", "application/xml")
+      |> call()
+
+    assert resp.status == 200
+    assert resp.resp_body =~ "<Deleted><Key>a.txt</Key></Deleted>"
+    assert resp.resp_body =~ "<Deleted><Key>b.txt</Key></Deleted>"
+    # Deleting a key that was never there still reports success (S3 delete is idempotent).
+    assert resp.resp_body =~ "<Deleted><Key>ghost.txt</Key></Deleted>"
+
+    assert call(conn(:get, "/#{bucket}/a.txt")).status == 404
+    assert call(conn(:get, "/#{bucket}/b.txt")).status == 404
+    # c.txt wasn't listed — it survives.
+    assert call(conn(:get, "/#{bucket}/c.txt")).status == 200
+  end
+
+  test "DeleteObjects: quiet mode omits the successes", %{bucket: bucket} do
+    assert call(conn(:put, "/#{bucket}")).status == 200
+    assert text_put("/#{bucket}/x.txt", "x").status == 200
+
+    body = "<Delete><Quiet>true</Quiet><Object><Key>x.txt</Key></Object></Delete>"
+
+    resp =
+      conn(:post, "/#{bucket}?delete", body)
+      |> put_req_header("content-type", "application/xml")
+      |> call()
+
+    assert resp.status == 200
+    refute resp.resp_body =~ "<Deleted>"
+    assert call(conn(:get, "/#{bucket}/x.txt")).status == 404
+  end
+
+  test "DeleteObjects: on a missing bucket is 404 NoSuchBucket", %{bucket: bucket} do
+    body = "<Delete><Object><Key>a.txt</Key></Object></Delete>"
+
+    resp =
+      conn(:post, "/#{bucket}?delete", body)
+      |> put_req_header("content-type", "application/xml")
+      |> call()
+
+    assert resp.status == 404
+    assert resp.resp_body =~ "NoSuchBucket"
+  end
+
   test "LIST v2: prefix, delimiter, and continuation-token pagination", %{bucket: bucket} do
     call(conn(:put, "/#{bucket}"))
 

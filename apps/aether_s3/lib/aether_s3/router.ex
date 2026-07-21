@@ -134,6 +134,54 @@ defmodule AetherS3.Router do
     end
   end
 
+  # POST /:bucket?delete — DeleteObjects (bulk delete, up to 1000 keys). Used by
+  # `aws s3 rm --recursive`, `aws s3 sync --delete`, and warp's cleanup.
+  post "/:bucket" do
+    conn = fetch_query_params(conn)
+    bucket = conn.params["bucket"]
+
+    if Map.has_key?(conn.query_params, "delete") do
+      bulk_delete(conn, bucket)
+    else
+      send_resp(conn, 400, "")
+    end
+  end
+
+  defp bulk_delete(conn, bucket) do
+    if ControlPlane.bucket_exists?(bucket) do
+      {:ok, body, conn} = read_body(conn, length: 1_000_000)
+      {keys, quiet} = XML.parse_delete(body)
+
+      {deleted, errors} =
+        Enum.reduce(keys, {[], []}, fn key, {del, err} ->
+          case safe_delete(bucket, key) do
+            :ok -> {[key | del], err}
+            {:error, code, message} -> {del, [{key, code, message} | err]}
+          end
+        end)
+
+      # Quiet mode reports only errors; a delete of a missing key is a success (S3
+      # delete is idempotent), so keys that were never there still come back Deleted.
+      deleted = if quiet, do: [], else: Enum.reverse(deleted)
+      send_xml(conn, 200, XML.delete_result(deleted, Enum.reverse(errors)))
+    else
+      send_xml(
+        conn,
+        404,
+        XML.error("NoSuchBucket", "The specified bucket does not exist.", conn.request_path)
+      )
+    end
+  end
+
+  defp safe_delete(bucket, key) do
+    Coordinator.delete(bucket, key)
+    :ok
+  rescue
+    _ -> {:error, "InternalError", "The object could not be deleted."}
+  catch
+    _, _ -> {:error, "InternalError", "The object could not be deleted."}
+  end
+
   get "/:bucket/*key" do
     conn = fetch_query_params(conn)
     bucket = conn.params["bucket"]

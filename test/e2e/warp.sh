@@ -54,16 +54,15 @@ sleep 5
 HOSTS="$(ip_of 1):9000,$(ip_of 2):9000,$(ip_of 3):9000"
 log "warp targets: $HOSTS"
 
-# Mixed workload (GET/STAT/PUT/DELETE) across all nodes. --noclear skips the
-# end-of-run bulk delete (which would need multi-object DeleteObjects, not yet
-# implemented); the per-op DELETEs in the mix still exercise deletion, and the
-# teardown wipes the volumes. Auth is off in this compose, so the creds are
-# ignored (warp always signs).
-log "running warp mixed (1 MiB objects, 20 concurrent, 20s)..."
+# Mixed workload (GET/STAT/PUT/DELETE) across all nodes, then warp's end-of-run
+# cleanup — which lists the bucket and bulk-deletes via DeleteObjects, so this run
+# also exercises multi-object delete + LIST pagination under a real workload. Auth
+# is off in this compose, so the creds are ignored (warp always signs).
+log "running warp mixed (1 MiB objects, 20 concurrent, 20s) + cleanup..."
 docker run --rm --network "$NET" minio/warp:latest mixed \
   --host "$HOSTS" \
   --access-key AKIAEXAMPLE --secret-key devsecret \
-  --bucket warp-e2e --obj.size 1MiB --concurrent 20 --duration 20s --noclear \
+  --bucket warp-e2e --obj.size 1MiB --concurrent 20 --duration 20s \
   >"$OUT" 2>&1 || fail "warp exited non-zero"
 
 grep -q "Report: Total" "$OUT" || { cat "$OUT" >&2; fail "warp produced no report — did it run?"; }
