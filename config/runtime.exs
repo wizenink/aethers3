@@ -218,6 +218,16 @@ if aether_s3_present? and config_env() != :test do
   # on every read has a real CPU cost; the background scrub is the always-on guard.
   config :aether_s3, :verify_reads, System.get_env("AETHER_VERIFY_READS") == "true"
 
+  # Graceful-shutdown drain window, in MILLISECONDS (default 5000). On shutdown the
+  # node flips /ready to 503 and waits this long before tearing down its request
+  # listeners, so a load balancer / k8s Service stops routing here before in-flight
+  # requests are drained. Keep the orchestrator's termination grace (docker
+  # `stop --time`, k8s `terminationGracePeriodSeconds`) larger than this + the
+  # listener drain, or the node gets SIGKILL'd mid-drain.
+  config :aether_s3,
+         :shutdown_drain_ms,
+         String.to_integer(System.get_env("AETHER_SHUTDOWN_DRAIN_MS", "5000"))
+
   # Cluster discovery strategy, chosen per deployment:
   #   * AETHER_PEERS set      -> Epmd: connect to a static, comma-separated list of
   #     node names (stable-name deploys). Names must be resolvable; discovery IS

@@ -38,6 +38,30 @@ require_auth = true
 # in-flight writes.
 # staging_sweep_age = 3600
 
+# --- Durability & integrity ---
+
+# Object-metadata write mode. "group" (default) group-commits: a put blocks until
+# a batched fsync makes it durable — same durability as per-write fsync, much
+# higher write throughput under load. "each" restores CubDB's per-write fsync.
+# objmeta_sync = "group"
+
+# Background bitrot scrub (opt-in). Seconds between full integrity passes; each
+# re-reads every local blob, verifies its md5 against the stored etag, and heals a
+# mismatch from a replica. Omit to disable. Non-destructive; safe to enable.
+# scrub_interval = 86400
+
+# Read-time integrity verification. true verifies each full local GET against its
+# etag while streaming, aborting the response and healing on a mismatch. Off by
+# default — whole-object md5 on every read has a CPU cost; scrub is the always-on
+# guard.
+# verify_reads = false
+
+# Graceful-shutdown drain window (milliseconds, default 5000). On shutdown the
+# node flips /ready to 503 and waits this long before draining request listeners,
+# so a load balancer stops routing here first. Keep the orchestrator's termination
+# grace (docker `stop --time`, k8s terminationGracePeriodSeconds) larger.
+# shutdown_drain_ms = 5000
+
 # --- Security ---
 
 # In-app TLS for the S3 API. Set BOTH to PEM file paths to serve HTTPS directly

@@ -1,5 +1,6 @@
 defmodule AetherS3.Application do
   use Application
+  require Logger
 
   @impl true
   def start(_type, _args) do
@@ -30,7 +31,12 @@ defmodule AetherS3.Application do
           {AetherS3.Replication.Reaper, name: AetherS3.Replication.Reaper},
           # Opt-in bitrot scrub (returns :ignore unless AETHER_SCRUB_INTERVAL is set).
           {AetherS3.Storage.Scrubber, []},
-          {Bandit, s3_bandit_opts(port)},
+          Supervisor.child_spec(
+            {Bandit,
+             s3_bandit_opts(port) ++ [thousand_island_options: [shutdown_timeout: 25_000]]},
+            id: :s3_bandit,
+            shutdown: 30_000
+          ),
           Supervisor.child_spec(
             {Bandit, plug: AetherS3.AdminRouter, scheme: :http, port: admin_port},
             id: :admin_bandit
@@ -38,6 +44,14 @@ defmodule AetherS3.Application do
         ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: AetherS3.Supervisor)
+  end
+
+  @impl true
+  def prep_stop(state) do
+    Logger.info("Shutdown: draining (readiness -> 503)")
+    AetherS3.Shutdown.begin_draining()
+    Process.sleep(Application.get_env(:aether_s3, :shutdown_drain_ms, 5000))
+    state
   end
 
   # The object-metadata store (CubDB), plus — in :group mode — the group-commit

@@ -22,6 +22,11 @@ defmodule AetherS3.Config do
   def write_quorum(n) when is_integer(n), do: n
   def write_quorum(n) when is_binary(n), do: String.to_integer(n)
 
+  @doc "Object-metadata write mode: `:group` (group-commit, default) or `:each` (per-write fsync)."
+  def objmeta_sync("each"), do: :each
+  def objmeta_sync(:each), do: :each
+  def objmeta_sync(_), do: :group
+
   @doc """
   Validate a log-level string and return the atom, raising on anything not
   accepted by `Logger` (fail-fast at boot beats a silently-ignored typo).
@@ -85,6 +90,8 @@ defmodule AetherS3.Config do
     |> put(toml, "staging_sweep_age", :staging_sweep_age_ms, &(&1 * 1000))
     |> put(toml, "scrub_interval", :scrub_interval_ms, &(&1 * 1000))
     |> put(toml, "verify_reads", :verify_reads)
+    |> put(toml, "objmeta_sync", :objmeta_sync, &objmeta_sync/1)
+    |> put(toml, "shutdown_drain_ms", :shutdown_drain_ms)
     |> put(toml, "write_quorum", :write_quorum, &write_quorum/1)
     |> put(toml, "require_auth", :require_auth)
     |> Enum.reverse()
