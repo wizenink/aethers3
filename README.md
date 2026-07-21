@@ -69,14 +69,18 @@ to run it locally or deploy it in front of a cluster.
 
 **Working:** replicated writes with a configurable write quorum, range-aware
 reads with cross-node proxying and read-repair, version-vector conflict
-resolution, fan-out deletes, scatter-gather listing, the Khepri control plane
-with libcluster auto-discovery + Raft auto-join, dead-member eviction and
-boot-time self-heal, an anti-entropy loop that also rebalances (migrates *and*
-sheds) on topology change, reaping of abandoned multipart uploads, **SigV4
-authentication with per-bucket authorization (owner + grants + groups), a
-token-gated admin API for identities/groups, and optional in-app TLS**,
-Prometheus metrics + health/readiness endpoints, and an end-to-end test suite
-(same-host, Docker, split-brain, rebalance, reaping) that runs in CI.
+resolution, fan-out deletes (single + bulk `DeleteObjects`), server-side
+`CopyObject`, scatter-gather listing with pagination + prefix/delimiter,
+group-commit metadata durability, background bitrot scrub + read-time integrity
+verification, the Khepri control plane with libcluster auto-discovery + Raft
+auto-join, dead-member eviction and boot-time self-heal, an anti-entropy loop
+that also rebalances (migrates *and* sheds) on topology change, reaping of
+abandoned multipart uploads, **SigV4 authentication with per-bucket
+authorization (owner + grants + groups), a token-gated admin API for
+identities/groups, and optional in-app TLS**, Prometheus metrics + distributed
+tracing (OpenTelemetry) + health/readiness endpoints, and an end-to-end test
+suite (same-host, Docker, split-brain, rebalance, reaping, warp load) that runs
+in CI.
 
 **Known gaps and future work:**
 
@@ -90,4 +94,7 @@ Prometheus metrics + health/readiness endpoints, and an end-to-end test suite
   are swept, but parts orphaned when a manifest is *overwritten* aren't yet.
 - **Authorization is grant-based, not a full policy engine** (no deny rules /
   wildcards / conditions); groups are flat. Object data isn't encrypted at rest.
-- **No bitrot scrub, no LIST pagination, no distributed tracing.**
+- **Operational hardening still in progress:** graceful-shutdown draining,
+  load-shedding / disk-full handling, and a backup/restore story are not done yet.
+- **S3 API gaps:** no conditional requests (`If-Match`/`If-None-Match`), no
+  `ListMultipartUploads`/`ListParts`, no versioning/tagging/lifecycle.

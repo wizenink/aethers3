@@ -31,18 +31,18 @@ defmodule AetherS3.AdminRouter do
   end
 
   get "/ready" do
-    if data_ready?() do
-      send_resp(conn, 200, "ready")
-    else
-      send_resp(conn, 503, "not ready")
+    cond do
+      AetherS3.Shutdown.draining?() -> send_resp(conn, 503, "draining")
+      data_ready?() -> send_resp(conn, 200, "ready")
+      true -> send_resp(conn, 503, "not ready")
     end
   end
 
   get "/ready/cp" do
-    if cp_ready?() do
-      send_resp(conn, 200, "ready")
-    else
-      send_resp(conn, 503, "not ready")
+    cond do
+      AetherS3.Shutdown.draining?() -> send_resp(conn, 503, "draining")
+      cp_ready?() -> send_resp(conn, 200, "ready")
+      true -> send_resp(conn, 503, "not ready")
     end
   end
 

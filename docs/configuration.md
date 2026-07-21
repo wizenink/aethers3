@@ -33,10 +33,32 @@ separately — see [Clustering](clustering.md).
 | `AETHER_CP_EVICT_GRACE` | _(unset)_ | Seconds an unreachable control-plane member waits before the Raft leader evicts it. Opt-in. |
 | `AETHER_MPU_REAP_AGE` | _(unset)_ | Seconds after which an abandoned multipart upload is swept. Opt-in. |
 | `AETHER_STAGING_SWEEP_AGE` | `3600` | Seconds a crashed-write staging temp must age before reclaim. Always on. |
+| **Durability & integrity** | | (see [Architecture](architecture.md)) |
+| `AETHER_OBJMETA_SYNC` | `group` | Object-metadata write mode. `group` group-commits — a put blocks until a batched fsync (same durability as per-write fsync, higher throughput); `each` = per-write fsync. |
+| `AETHER_SCRUB_INTERVAL` | _(unset)_ | Seconds between background bitrot-scrub passes (re-read every local blob, verify its md5 vs etag, heal a mismatch from a replica). Opt-in. |
+| `AETHER_VERIFY_READS` | `false` | `true` verifies each full local GET against its etag while streaming, aborting the response + healing on a mismatch (whole-object md5 per read has a CPU cost). |
+| `AETHER_SHUTDOWN_DRAIN_MS` | `5000` | Graceful-shutdown drain window (ms): on shutdown, flip `/ready` to 503 and wait this long before draining in-flight requests so a load balancer stops routing here first. |
 | `AETHER_CONFIG` | `/etc/aether_s3/config.toml` | Path to the production TOML config (below). |
 
 Discovery precedence: `AETHER_PEERS` → `AETHER_DNS_QUERY` → `AETHER_GOSSIP` →
 LocalEpmd (same-host dev default).
+
+### Graceful shutdown
+
+On `SIGTERM` (rolling deploy, `docker stop`, k8s pod eviction) the node drains
+gracefully: it flips `/ready` to `503` so a load balancer stops routing new
+traffic (while `/health` stays `200`), waits `AETHER_SHUTDOWN_DRAIN_MS`
+(default 5000) for the LB to notice, then stops accepting connections and lets
+in-flight requests finish before tearing down.
+
+**Give the orchestrator enough termination grace.** The total shutdown budget is
+`AETHER_SHUTDOWN_DRAIN_MS` **plus** the in-flight-request drain (up to ~25–30 s
+for large transfers). Set the platform's grace period at least that high, or the
+node is `SIGKILL`ed mid-drain and the graceful path is wasted:
+
+- Docker: `docker stop --time <seconds>` (default is only **10 s**).
+- Compose: `stop_grace_period`.
+- Kubernetes: `terminationGracePeriodSeconds` (default **30 s**).
 
 ### Live log level
 
