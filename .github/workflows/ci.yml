@@ -148,6 +148,40 @@ jobs:
       - name: Run presigned-URL e2e
         run: bash test/e2e/presign.sh
 
+  e2e-conditional:
+    name: E2E (conditional requests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Elixir/OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "29"
+          elixir-version: "1.20"
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Verify S3 client (aws-cli)
+        run: aws --version
+
+      # Drives preconditions with curl so the assertions are exact wire status
+      # codes (304 with an empty body, 412, 404), then repeats create-if-absent
+      # through aws-cli to prove a real SDK's conditional write is honored.
+      - name: Run conditional-requests e2e
+        run: bash test/e2e/conditional.sh
+
   e2e-docker:
     name: E2E (docker cluster)
     runs-on: ubuntu-latest
