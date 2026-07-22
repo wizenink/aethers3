@@ -62,6 +62,12 @@ require_auth = true
 # grace (docker `stop --time`, k8s terminationGracePeriodSeconds) larger.
 # shutdown_drain_ms = 5000
 
+# Disk-space guard (opt-in). Reserve in BYTES — when free space on the data dir
+# drops below it, new object writes are rejected with 507 (reads + deletes keep
+# working), keeping headroom so the metadata / Raft log never runs the disk dry.
+# Absolute bytes, so the reserve is fixed regardless of disk size. Omit to disable.
+# min_free_bytes = 5368709120   # 5 GiB
+
 # --- Security ---
 
 # In-app TLS for the S3 API. Set BOTH to PEM file paths to serve HTTPS directly

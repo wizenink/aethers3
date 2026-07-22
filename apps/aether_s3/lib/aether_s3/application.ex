@@ -31,6 +31,8 @@ defmodule AetherS3.Application do
           {AetherS3.Replication.Reaper, name: AetherS3.Replication.Reaper},
           # Opt-in bitrot scrub (returns :ignore unless AETHER_SCRUB_INTERVAL is set).
           {AetherS3.Storage.Scrubber, []},
+          # Opt-in disk-space guard (returns :ignore unless AETHER_MIN_FREE_BYTES is set).
+          {AetherS3.Storage.DiskGuard, []},
           Supervisor.child_spec(
             {Bandit,
              s3_bandit_opts(port) ++ [thousand_island_options: [shutdown_timeout: 25_000]]},

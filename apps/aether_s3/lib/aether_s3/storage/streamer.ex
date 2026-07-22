@@ -32,19 +32,22 @@ defmodule AetherS3.Storage.Streamer do
   defp do_ingest(conn, fd, md5_ctx, size) do
     case Plug.Conn.read_body(conn, length: @chunk) do
       {:more, chunk, conn} ->
-        :ok = :file.write(fd, chunk)
-        do_ingest(conn, fd, :crypto.hash_update(md5_ctx, chunk), size + byte_size(chunk))
+        # `with` so a write failure (e.g. ENOSPC racing past the disk guard)
+        # returns {:error, reason} instead of a badmatch crash mid-request.
+        with :ok <- :file.write(fd, chunk) do
+          do_ingest(conn, fd, :crypto.hash_update(md5_ctx, chunk), size + byte_size(chunk))
+        end
 
       {:ok, chunk, conn} ->
-        :ok = :file.write(fd, chunk)
+        with :ok <- :file.write(fd, chunk) do
+          etag =
+            md5_ctx
+            |> :crypto.hash_update(chunk)
+            |> :crypto.hash_final()
+            |> Base.encode16(case: :lower)
 
-        etag =
-          md5_ctx
-          |> :crypto.hash_update(chunk)
-          |> :crypto.hash_final()
-          |> Base.encode16(case: :lower)
-
-        {:ok, %{size: size + byte_size(chunk), etag: etag}, conn}
+          {:ok, %{size: size + byte_size(chunk), etag: etag}, conn}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -56,15 +59,15 @@ defmodule AetherS3.Storage.Streamer do
   defp do_ingest_chunked(conn, fd, md5_ctx, size, dec) do
     case Plug.Conn.read_body(conn, length: @chunk) do
       {:more, raw, conn} ->
-        with {:ok, data, dec} <- AwsChunked.decode(dec, raw) do
-          :ok = :file.write(fd, data)
+        with {:ok, data, dec} <- AwsChunked.decode(dec, raw),
+             :ok <- :file.write(fd, data) do
           n = IO.iodata_length(data)
           do_ingest_chunked(conn, fd, :crypto.hash_update(md5_ctx, data), size + n, dec)
         end
 
       {:ok, raw, conn} ->
-        with {:ok, data, _dec} <- AwsChunked.decode(dec, raw) do
-          :ok = :file.write(fd, data)
+        with {:ok, data, _dec} <- AwsChunked.decode(dec, raw),
+             :ok <- :file.write(fd, data) do
           n = IO.iodata_length(data)
 
           etag =
