@@ -4,7 +4,7 @@ defmodule AetherS3.MixProject do
   def project do
     [
       app: :aether_s3,
-      version: "0.4.0",
+      version: "0.8.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
