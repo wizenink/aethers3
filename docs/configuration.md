@@ -39,6 +39,7 @@ separately — see [Clustering](clustering.md).
 | `AETHER_VERIFY_READS` | `false` | `true` verifies each full local GET against its etag while streaming, aborting the response + healing on a mismatch (whole-object md5 per read has a CPU cost). |
 | `AETHER_SHUTDOWN_DRAIN_MS` | `5000` | Graceful-shutdown drain window (ms): on shutdown, flip `/ready` to 503 and wait this long before draining in-flight requests so a load balancer stops routing here first. |
 | `AETHER_MIN_FREE_BYTES` | _(unset)_ | Disk-space reserve (bytes). When free space on the data dir drops below it, object writes are rejected with `507` (reads/deletes still work), keeping headroom so the metadata/Raft log never runs the disk dry. Opt-in. |
+| `AETHER_MAX_OBJECT_BYTES` | _(unset)_ | Maximum single-object size (bytes). A PUT whose declared size exceeds it is rejected with `400 EntityTooLarge`. Opt-in. |
 | `AETHER_CONFIG` | `/etc/aether_s3/config.toml` | Path to the production TOML config (below). |
 
 Discovery precedence: `AETHER_PEERS` → `AETHER_DNS_QUERY` → `AETHER_GOSSIP` →

@@ -240,6 +240,16 @@ if aether_s3_present? and config_env() != :test do
       :ok
   end
 
+  # Maximum single-object size in BYTES (opt-in). A PUT whose declared size
+  # exceeds it is rejected with 400 EntityTooLarge. Unset = no limit.
+  case System.get_env("AETHER_MAX_OBJECT_BYTES") do
+    b when is_binary(b) and b != "" ->
+      config :aether_s3, :max_object_bytes, String.to_integer(b)
+
+    _ ->
+      :ok
+  end
+
   # Cluster discovery strategy, chosen per deployment:
   #   * AETHER_PEERS set      -> Epmd: connect to a static, comma-separated list of
   #     node names (stable-name deploys). Names must be resolvable; discovery IS
