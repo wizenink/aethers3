@@ -343,16 +343,52 @@ defmodule AetherS3.Router do
   end
 
   defp put_object(conn, bucket, key) do
-    if AetherS3.Storage.DiskGuard.writable?() do
-      do_put_object(conn, bucket, key)
-    else
-      :telemetry.execute([:aether, :write, :rejected], %{count: 1}, %{reason: "disk_full"})
+    cond do
+      not AetherS3.Storage.DiskGuard.writable?() ->
+        :telemetry.execute([:aether, :write, :rejected], %{count: 1}, %{reason: "disk_full"})
 
-      send_xml(
-        conn,
-        507,
-        XML.error("InsufficientStorage", "The node is low on disk space.", conn.request_path)
-      )
+        send_xml(
+          conn,
+          507,
+          XML.error("InsufficientStorage", "The node is low on disk space.", conn.request_path)
+        )
+
+      oversized?(conn) ->
+        :telemetry.execute([:aether, :write, :rejected], %{count: 1}, %{reason: "too_large"})
+
+        send_xml(
+          conn,
+          400,
+          XML.error(
+            "EntityTooLarge",
+            "The object exceeds the configured maximum size.",
+            conn.request_path
+          )
+        )
+
+      true ->
+        do_put_object(conn, bucket, key)
+    end
+  end
+
+  # Whether the request's declared object size exceeds `:max_object_bytes`. Uses
+  # the aws-chunked decoded length when present, else Content-Length. A missing
+  # declared size can't be checked up front — the disk guard is the backstop.
+  defp oversized?(conn) do
+    case {Application.get_env(:aether_s3, :max_object_bytes), declared_size(conn)} do
+      {max, size} when is_integer(max) and is_integer(size) -> size > max
+      _ -> false
+    end
+  end
+
+  defp declared_size(conn) do
+    raw =
+      conn |> get_req_header("x-amz-decoded-content-length") |> List.first() ||
+        conn |> get_req_header("content-length") |> List.first()
+
+    case raw && Integer.parse(raw) do
+      {n, _rest} -> n
+      _ -> nil
     end
   end
 

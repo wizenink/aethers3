@@ -68,6 +68,10 @@ require_auth = true
 # Absolute bytes, so the reserve is fixed regardless of disk size. Omit to disable.
 # min_free_bytes = 5368709120   # 5 GiB
 
+# Maximum single-object size in BYTES (opt-in). A PUT whose declared size exceeds
+# it is rejected with 400 EntityTooLarge. Omit for no limit.
+# max_object_bytes = 5368709120  # 5 GiB
+
 # --- Security ---
 
 # In-app TLS for the S3 API. Set BOTH to PEM file paths to serve HTTPS directly

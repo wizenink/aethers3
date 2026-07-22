@@ -249,6 +249,31 @@ defmodule AetherS3.RouterTest do
     assert call(conn(:get, "/#{bucket}/y.txt")).status == 200
   end
 
+  test "PUT over max_object_bytes is rejected with EntityTooLarge", %{bucket: bucket} do
+    assert call(conn(:put, "/#{bucket}")).status == 200
+    Application.put_env(:aether_s3, :max_object_bytes, 8)
+    on_exit(fn -> Application.delete_env(:aether_s3, :max_object_bytes) end)
+
+    # Declares 20 bytes (> 8) via Content-Length — rejected before ingest.
+    resp =
+      conn(:put, "/#{bucket}/big.txt", "twenty-byte payload!")
+      |> put_req_header("content-length", "20")
+      |> put_req_header("content-type", "text/plain")
+      |> call()
+
+    assert resp.status == 400
+    assert resp.resp_body =~ "EntityTooLarge"
+
+    # An object under the cap still stores.
+    ok =
+      conn(:put, "/#{bucket}/ok.txt", "tiny")
+      |> put_req_header("content-length", "4")
+      |> put_req_header("content-type", "text/plain")
+      |> call()
+
+    assert ok.status == 200
+  end
+
   test "LIST v2: prefix, delimiter, and continuation-token pagination", %{bucket: bucket} do
     call(conn(:put, "/#{bucket}"))
 

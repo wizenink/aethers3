@@ -182,6 +182,19 @@ jobs:
       - name: Run rebalance e2e
         run: bash test/e2e/rebalance.sh
 
+  e2e-converge:
+    name: E2E (kill-then-return convergence)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Kills a replica in a 5-node RF=3 cluster (a temp owner restores RF), then
+      # returns it and asserts the temp owner sheds so every object settles back to
+      # exactly RF copies on its original HRW owners — the shed path rebalance.sh
+      # (grow-only) never exercises.
+      - name: Run convergence e2e
+        run: bash test/e2e/converge.sh
+
   e2e-reap:
     name: E2E (incomplete-MPU reaping)
     runs-on: ubuntu-latest
