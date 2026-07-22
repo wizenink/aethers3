@@ -446,4 +446,139 @@ defmodule AetherS3.RouterTest do
     assert resp.status == 404
     assert resp.state == :sent
   end
+
+  describe "conditional requests" do
+    # PUT an object and hand back its etag (unquoted, as stored).
+    defp put_probe(bucket, key, body) do
+      put = text_put("/#{bucket}/#{key}", body)
+      assert put.status == 200
+      [quoted] = get_resp_header(put, "etag")
+      String.trim(quoted, "\"")
+    end
+
+    defp cond_get(path, header, value) do
+      conn(:get, path) |> put_req_header(header, value) |> call()
+    end
+
+    test "GET with a matching If-None-Match returns 304 and no body", %{bucket: bucket} do
+      call(conn(:put, "/#{bucket}"))
+      etag = put_probe(bucket, "c.txt", "cacheable")
+
+      resp = cond_get("/#{bucket}/c.txt", "if-none-match", ~s("#{etag}"))
+      assert resp.status == 304
+      assert resp.resp_body == ""
+      assert get_resp_header(resp, "etag") == [~s("#{etag}")]
+    end
+
+    test "GET with a stale If-None-Match returns the object", %{bucket: bucket} do
+      call(conn(:put, "/#{bucket}"))
+      put_probe(bucket, "c.txt", "cacheable")
+
+      resp = cond_get("/#{bucket}/c.txt", "if-none-match", ~s("stale"))
+      assert resp.status == 200
+      assert resp.resp_body == "cacheable"
+    end
+
+    test "GET with a non-matching If-Match returns 412", %{bucket: bucket} do
+      call(conn(:put, "/#{bucket}"))
+      put_probe(bucket, "c.txt", "body")
+
+      resp = cond_get("/#{bucket}/c.txt", "if-match", ~s("nope"))
+      assert resp.status == 412
+      assert resp.resp_body =~ "PreconditionFailed"
+    end
+
+    test "GET with a matching If-Match serves the object", %{bucket: bucket} do
+      call(conn(:put, "/#{bucket}"))
+      etag = put_probe(bucket, "c.txt", "body")
+
+      resp = cond_get("/#{bucket}/c.txt", "if-match", ~s("#{etag}"))
+      assert resp.status == 200
+      assert resp.resp_body == "body"
+    end
+
+    test "HEAD honors preconditions with an empty body", %{bucket: bucket} do
+      call(conn(:put, "/#{bucket}"))
+      etag = put_probe(bucket, "c.txt", "body")
+
+      not_modified =
+        conn(:head, "/#{bucket}/c.txt")
+        |> put_req_header("if-none-match", ~s("#{etag}"))
+        |> call()
+
+      assert not_modified.status == 304
+      assert not_modified.resp_body == ""
+
+      failed =
+        conn(:head, "/#{bucket}/c.txt") |> put_req_header("if-match", ~s("nope")) |> call()
+
+      assert failed.status == 412
+      assert failed.resp_body == ""
+    end
+
+    test "PUT with If-None-Match: * creates only when absent", %{bucket: bucket} do
+      call(conn(:put, "/#{bucket}"))
+
+      created =
+        conn(:put, "/#{bucket}/once.txt", "first")
+        |> put_req_header("content-type", "text/plain")
+        |> put_req_header("if-none-match", "*")
+        |> call()
+
+      assert created.status == 200
+
+      # The key now exists, so the same conditional write must be refused.
+      blocked =
+        conn(:put, "/#{bucket}/once.txt", "second")
+        |> put_req_header("content-type", "text/plain")
+        |> put_req_header("if-none-match", "*")
+        |> call()
+
+      assert blocked.status == 412
+      assert blocked.resp_body =~ "PreconditionFailed"
+      # ...and the original content is untouched.
+      assert call(conn(:get, "/#{bucket}/once.txt")).resp_body == "first"
+    end
+
+    test "PUT with a matching If-Match overwrites (compare-and-swap)", %{bucket: bucket} do
+      call(conn(:put, "/#{bucket}"))
+      etag = put_probe(bucket, "cas.txt", "v1")
+
+      ok =
+        conn(:put, "/#{bucket}/cas.txt", "v2")
+        |> put_req_header("content-type", "text/plain")
+        |> put_req_header("if-match", ~s("#{etag}"))
+        |> call()
+
+      assert ok.status == 200
+      assert call(conn(:get, "/#{bucket}/cas.txt")).resp_body == "v2"
+    end
+
+    test "PUT with a stale If-Match is refused and leaves the object alone", %{bucket: bucket} do
+      call(conn(:put, "/#{bucket}"))
+      put_probe(bucket, "cas.txt", "v1")
+
+      stale =
+        conn(:put, "/#{bucket}/cas.txt", "v2")
+        |> put_req_header("content-type", "text/plain")
+        |> put_req_header("if-match", ~s("someone-elses-etag"))
+        |> call()
+
+      assert stale.status == 412
+      assert call(conn(:get, "/#{bucket}/cas.txt")).resp_body == "v1"
+    end
+
+    test "PUT with If-Match on a missing key is 404", %{bucket: bucket} do
+      call(conn(:put, "/#{bucket}"))
+
+      resp =
+        conn(:put, "/#{bucket}/ghost.txt", "x")
+        |> put_req_header("content-type", "text/plain")
+        |> put_req_header("if-match", ~s("whatever"))
+        |> call()
+
+      assert resp.status == 404
+      assert resp.resp_body =~ "NoSuchKey"
+    end
+  end
 end

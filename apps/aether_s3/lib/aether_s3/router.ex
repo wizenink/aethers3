@@ -6,6 +6,7 @@ defmodule AetherS3.Router do
   alias AetherS3.S3.XML
   alias AetherS3.S3.Acl
   alias AetherS3.S3.ListObjects
+  alias AetherS3.S3.Conditional
   alias AetherS3.Auth.Grants
   alias AetherS3.ControlPlane.Store, as: ControlPlane
   alias AetherS3.Storage.Multipart
@@ -199,36 +200,13 @@ defmodule AetherS3.Router do
     range = conn |> get_req_header("range") |> List.first()
 
     case Coordinator.locate_repair(bucket, key) do
-      {:ok, %{parts: parts} = meta, _node} ->
-        conn =
-          conn
-          |> put_resp_header("content-type", meta.content_type)
-          |> put_resp_header("last-modified", http_date(meta.last_modified))
-
-        case Streamer.egress_manifest(
-               conn,
-               parts,
-               &Coordinator.locate_repair(Multipart.bucket(), &1.key),
-               range: range
-             ) do
-          {:error, :missing_part} -> send_resp(conn, 500, "")
-          conn -> conn
-        end
-
       {:ok, meta, node} ->
-        conn =
-          conn
-          |> put_resp_header("content-type", meta.content_type)
-          |> put_resp_header("last-modified", http_date(meta.last_modified))
-
-        if node == Node.self() do
-          Streamer.egress(
-            conn,
-            BlobStore.path(bucket, key),
-            egress_opts(bucket, key, meta, range)
-          )
-        else
-          Streamer.egress_remote(conn, node, bucket, key, meta.size, range: range)
+        # Preconditions are evaluated before any bytes move, so a 304/412 costs a
+        # metadata lookup rather than a streamed body.
+        case Conditional.evaluate_read(conn.req_headers, meta) do
+          :ok -> serve_object(conn, bucket, key, meta, node, range)
+          :not_modified -> not_modified(conn, meta)
+          :precondition_failed -> precondition_failed(conn)
         end
 
       :not_found ->
@@ -238,6 +216,71 @@ defmodule AetherS3.Router do
           404,
           XML.error("NoSuchKey", "The specified key does not exist.", conn.request_path)
         )
+    end
+  end
+
+  # A completed multipart object is a manifest (meta-only, parts held separately).
+  defp serve_object(conn, _bucket, _key, %{parts: parts} = meta, _node, range) do
+    conn =
+      conn
+      |> maybe_put_etag(meta)
+      |> put_resp_header("content-type", meta.content_type)
+      |> put_resp_header("last-modified", http_date(meta.last_modified))
+
+    case Streamer.egress_manifest(
+           conn,
+           parts,
+           &Coordinator.locate_repair(Multipart.bucket(), &1.key),
+           range: range
+         ) do
+      {:error, :missing_part} -> send_resp(conn, 500, "")
+      conn -> conn
+    end
+  end
+
+  defp serve_object(conn, bucket, key, meta, node, range) do
+    conn =
+      conn
+      |> maybe_put_etag(meta)
+      |> put_resp_header("content-type", meta.content_type)
+      |> put_resp_header("last-modified", http_date(meta.last_modified))
+
+    if node == Node.self() do
+      Streamer.egress(
+        conn,
+        BlobStore.path(bucket, key),
+        egress_opts(bucket, key, meta, range)
+      )
+    else
+      Streamer.egress_remote(conn, node, bucket, key, meta.size, range: range)
+    end
+  end
+
+  # 304 carries the validators (and no body) so the client can refresh its cache
+  # entry without a re-fetch.
+  defp not_modified(conn, meta) do
+    conn
+    |> maybe_put_etag(meta)
+    |> put_resp_header("last-modified", http_date(meta.last_modified))
+    |> send_resp(304, "")
+  end
+
+  defp precondition_failed(conn) do
+    send_xml(
+      conn,
+      412,
+      XML.error(
+        "PreconditionFailed",
+        "At least one of the preconditions you specified did not hold.",
+        conn.request_path
+      )
+    )
+  end
+
+  defp maybe_put_etag(conn, meta) do
+    case Map.get(meta, :etag) do
+      nil -> conn
+      etag -> put_resp_header(conn, "etag", ~s("#{etag}"))
     end
   end
 
@@ -309,12 +352,23 @@ defmodule AetherS3.Router do
 
     case Coordinator.locate_repair(bucket, key) do
       {:ok, meta, _node} ->
-        conn
-        |> put_resp_header("etag", ~s("#{meta.etag}"))
-        |> put_resp_header("content-length", Integer.to_string(meta.size))
-        |> put_resp_header("content-type", meta.content_type)
-        |> put_resp_header("last-modified", http_date(meta.last_modified))
-        |> send_resp(200, "")
+        # HEAD must not carry a body, so the 412 here is bare rather than the XML
+        # error document GET returns.
+        case Conditional.evaluate_read(conn.req_headers, meta) do
+          :ok ->
+            conn
+            |> put_resp_header("etag", ~s("#{meta.etag}"))
+            |> put_resp_header("content-length", Integer.to_string(meta.size))
+            |> put_resp_header("content-type", meta.content_type)
+            |> put_resp_header("last-modified", http_date(meta.last_modified))
+            |> send_resp(200, "")
+
+          :not_modified ->
+            not_modified(conn, meta)
+
+          :precondition_failed ->
+            send_resp(conn, 412, "")
+        end
 
       :not_found ->
         send_resp(conn, 404, "")
@@ -431,29 +485,10 @@ defmodule AetherS3.Router do
           conn |> get_req_header("content-type") |> List.first() || "application/octet-stream"
 
         if ControlPlane.bucket_exists?(bucket) do
-          case Coordinator.put(conn, bucket, key, content_type) do
-            {:ok, etag, conn} ->
-              conn
-              |> put_resp_header("etag", ~s("#{etag}"))
-              |> send_resp(200, "")
-
-            {:error, :insufficient_replicas, conn} ->
-              send_xml(
-                conn,
-                503,
-                XML.error(
-                  "ServiceUnavailable",
-                  "Not enough replicas to store object.",
-                  conn.request_path
-                )
-              )
-
-            {:error, _reason} ->
-              send_xml(
-                conn,
-                500,
-                XML.error("InternalError", "Upload could not be completed.", conn.request_path)
-              )
+          case conditional_write(conn, bucket, key) do
+            :ok -> write_object(conn, bucket, key, content_type)
+            :precondition_failed -> precondition_failed(conn)
+            :not_found -> send_xml(conn, 404, no_such_key(conn))
           end
         else
           send_xml(
@@ -462,6 +497,56 @@ defmodule AetherS3.Router do
             XML.error("NoSuchBucket", "The specified bucket does not exist.", conn.request_path)
           )
         end
+    end
+  end
+
+  # Evaluate If-Match / If-None-Match for a PUT. Only reads the current metadata
+  # when a precondition is actually present, so the unconditional path (nearly all
+  # writes) pays nothing. Uses `locate_repair` rather than `locate` so the check
+  # runs against the freshest replica view instead of whichever answers first —
+  # this is a precondition, so a stale read is a wrong answer. Still not atomic:
+  # see `AetherS3.S3.Conditional`.
+  defp conditional_write(conn, bucket, key) do
+    if Conditional.write_conditions?(conn.req_headers) do
+      current =
+        case Coordinator.locate_repair(bucket, key) do
+          {:ok, meta, _node} -> meta
+          :not_found -> nil
+        end
+
+      Conditional.evaluate_write(conn.req_headers, current)
+    else
+      :ok
+    end
+  end
+
+  defp no_such_key(conn),
+    do: XML.error("NoSuchKey", "The specified key does not exist.", conn.request_path)
+
+  defp write_object(conn, bucket, key, content_type) do
+    case Coordinator.put(conn, bucket, key, content_type) do
+      {:ok, etag, conn} ->
+        conn
+        |> put_resp_header("etag", ~s("#{etag}"))
+        |> send_resp(200, "")
+
+      {:error, :insufficient_replicas, conn} ->
+        send_xml(
+          conn,
+          503,
+          XML.error(
+            "ServiceUnavailable",
+            "Not enough replicas to store object.",
+            conn.request_path
+          )
+        )
+
+      {:error, _reason} ->
+        send_xml(
+          conn,
+          500,
+          XML.error("InternalError", "Upload could not be completed.", conn.request_path)
+        )
     end
   end
 

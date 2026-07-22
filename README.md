@@ -70,7 +70,9 @@ to run it locally or deploy it in front of a cluster.
 **Working:** replicated writes with a configurable write quorum, range-aware
 reads with cross-node proxying and read-repair, version-vector conflict
 resolution, fan-out deletes (single + bulk `DeleteObjects`), server-side
-`CopyObject`, scatter-gather listing with pagination + prefix/delimiter,
+`CopyObject`, conditional requests (`If-Match` / `If-None-Match` /
+`If-Modified-Since` / `If-Unmodified-Since`) on reads *and* writes,
+scatter-gather listing with pagination + prefix/delimiter,
 group-commit metadata durability, background bitrot scrub + read-time integrity
 verification, the Khepri control plane with libcluster auto-discovery + Raft
 auto-join, dead-member eviction and boot-time self-heal, an anti-entropy loop
@@ -90,11 +92,17 @@ in CI.
 - **Conflict resolution is single-value:** concurrent writes to the same key
   converge to one version (version vectors detect the conflict, but S3 can't
   expose siblings, so the losing write is discarded).
+- **Conditional writes are best-effort, not atomic:** `If-Match` / `If-None-Match`
+  on a PUT are checked against metadata read at the start of the request, so two
+  *concurrent* conditional writes to the same key can both pass and the usual
+  conflict resolution picks a winner. They guard against sequential clobbering
+  ("create only if absent", "overwrite only what I read"), not as a distributed
+  lock — that would require routing every conditional write through Raft.
 - **Orphan cleanup:** abandoned multipart uploads and crashed-write staging temps
   are swept, but parts orphaned when a manifest is *overwritten* aren't yet.
 - **Authorization is grant-based, not a full policy engine** (no deny rules /
   wildcards / conditions); groups are flat. Object data isn't encrypted at rest.
 - **Operational hardening still in progress:** graceful-shutdown draining,
   load-shedding / disk-full handling, and a backup/restore story are not done yet.
-- **S3 API gaps:** no conditional requests (`If-Match`/`If-None-Match`), no
-  `ListMultipartUploads`/`ListParts`, no versioning/tagging/lifecycle.
+- **S3 API gaps:** no `ListMultipartUploads`/`ListParts`, no
+  versioning/tagging/lifecycle.
