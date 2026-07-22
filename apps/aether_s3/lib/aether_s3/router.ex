@@ -343,6 +343,20 @@ defmodule AetherS3.Router do
   end
 
   defp put_object(conn, bucket, key) do
+    if AetherS3.Storage.DiskGuard.writable?() do
+      do_put_object(conn, bucket, key)
+    else
+      :telemetry.execute([:aether, :write, :rejected], %{count: 1}, %{reason: "disk_full"})
+
+      send_xml(
+        conn,
+        507,
+        XML.error("InsufficientStorage", "The node is low on disk space.", conn.request_path)
+      )
+    end
+  end
+
+  defp do_put_object(conn, bucket, key) do
     case conn.query_params do
       %{"partNumber" => pn, "uploadId" => upload_id} ->
         part_number = String.to_integer(pn)

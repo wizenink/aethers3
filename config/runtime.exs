@@ -228,6 +228,18 @@ if aether_s3_present? and config_env() != :test do
          :shutdown_drain_ms,
          String.to_integer(System.get_env("AETHER_SHUTDOWN_DRAIN_MS", "5000"))
 
+  # Disk-space guard is OPT-IN: set AETHER_MIN_FREE_BYTES to a reserve (bytes) —
+  # when free space on the data dir drops below it, new object writes are rejected
+  # with 507 (reads + deletes keep working), keeping headroom so the metadata /
+  # Raft log never runs the disk dry. Unset = disabled.
+  case System.get_env("AETHER_MIN_FREE_BYTES") do
+    b when is_binary(b) and b != "" ->
+      config :aether_s3, :min_free_bytes, String.to_integer(b)
+
+    _ ->
+      :ok
+  end
+
   # Cluster discovery strategy, chosen per deployment:
   #   * AETHER_PEERS set      -> Epmd: connect to a static, comma-separated list of
   #     node names (stable-name deploys). Names must be resolvable; discovery IS

@@ -120,6 +120,10 @@ defmodule AetherS3.Telemetry do
         measurement: :count,
         description: "Full reads that failed read-time integrity verification"
       ),
+      sum("aether.write.rejected.count",
+        measurement: :count,
+        description: "Object writes rejected — the disk guard tripped (507, low space)"
+      ),
 
       # --- Multipart lifecycle ---
       sum("aether.multipart.initiated.count", measurement: :count),

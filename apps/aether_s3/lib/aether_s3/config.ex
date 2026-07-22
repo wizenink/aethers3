@@ -92,6 +92,7 @@ defmodule AetherS3.Config do
     |> put(toml, "verify_reads", :verify_reads)
     |> put(toml, "objmeta_sync", :objmeta_sync, &objmeta_sync/1)
     |> put(toml, "shutdown_drain_ms", :shutdown_drain_ms)
+    |> put(toml, "min_free_bytes", :min_free_bytes)
     |> put(toml, "write_quorum", :write_quorum, &write_quorum/1)
     |> put(toml, "require_auth", :require_auth)
     |> Enum.reverse()

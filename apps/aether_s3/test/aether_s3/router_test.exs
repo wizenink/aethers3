@@ -233,6 +233,22 @@ defmodule AetherS3.RouterTest do
     assert resp.resp_body =~ "NoSuchBucket"
   end
 
+  test "PUT is rejected with 507 when the disk guard reports low space", %{bucket: bucket} do
+    assert call(conn(:put, "/#{bucket}")).status == 200
+    # Simulate the guard tripping (the DiskGuard poller isn't running in tests).
+    :persistent_term.put({AetherS3.Storage.DiskGuard, :writable}, false)
+    on_exit(fn -> :persistent_term.put({AetherS3.Storage.DiskGuard, :writable}, true) end)
+
+    resp = text_put("/#{bucket}/x.txt", "data")
+    assert resp.status == 507
+    assert resp.resp_body =~ "InsufficientStorage"
+
+    # Reads still work while writes are blocked.
+    :persistent_term.put({AetherS3.Storage.DiskGuard, :writable}, true)
+    assert text_put("/#{bucket}/y.txt", "ok").status == 200
+    assert call(conn(:get, "/#{bucket}/y.txt")).status == 200
+  end
+
   test "LIST v2: prefix, delimiter, and continuation-token pagination", %{bucket: bucket} do
     call(conn(:put, "/#{bucket}"))
 
